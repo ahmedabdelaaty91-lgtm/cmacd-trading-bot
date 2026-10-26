@@ -127,7 +127,7 @@ def analyze_coin(item):
             if close_p[i] > close_p[i-1] and close_p[i-1] > close_p[i-2]:
                 patterns.append("Three White Soldiers")
                 
-    # 4. Support Detection
+    # 4. Support Detection (SR Support Channel)
     prd = 8
     df['pivot_low'] = np.nan
     for i in range(prd, n - prd):
@@ -146,7 +146,7 @@ def analyze_coin(item):
     cur_p = close_p[-1]
     cur_low = low_p[-1]
     
-    # Check if price is within 3.5% of any support
+    # Check if price is within 3.5% of any confirmed support
     at_support = False
     sup_level = None
     for idx, s_val in valid_supports:
@@ -155,11 +155,38 @@ def analyze_coin(item):
             sup_level = s_val
             break
             
+    # 5. SML Squeeze (TTM Squeeze Pro)
+    basis = df['close'].rolling(20).mean()
+    dev = 2.0 * df['close'].rolling(20).std()
+    upper_bb = basis + dev
+    lower_bb = basis - dev
+    
+    tr = pd.concat([df['high'] - df['low'], np.abs(df['high'] - df['close'].shift(1)), np.abs(df['low'] - df['close'].shift(1))], axis=1).max(axis=1)
+    atr20 = tr.rolling(20).mean()
+    upper_kc = basis + 1.5 * atr20
+    lower_kc = basis - 1.5 * atr20
+    
+    in_squeeze = (lower_bb > lower_kc) & (upper_bb < upper_kc)
+    # Fired: was in squeeze 1 or 2 bars ago and now released
+    squeeze_fired = ((in_squeeze.shift(1) == True) & (in_squeeze == False)) | ((in_squeeze.shift(2) == True) & (in_squeeze.shift(1) == False))
+    recent_squeeze = in_squeeze | in_squeeze.shift(1) | in_squeeze.shift(2) | in_squeeze.shift(3)
+    
+    is_sq_now = bool(in_squeeze.iloc[-1])
+    is_sq_fired = bool(squeeze_fired.iloc[-1] or (n > 2 and squeeze_fired.iloc[-2]))
+    is_sq_energy = bool(recent_squeeze.iloc[-1])
+    
     macd_cross = df['macd_cross_up'].iloc[-1] or df['macd_cross_up'].iloc[-2]
     banker_act = df['banker_active'].iloc[-1]
     
-    is_buy_signal = at_support and (len(patterns) > 0) and macd_cross and banker_act
+    # Base technical setup without BTC requirement
+    core_technical_ok = at_support and (len(patterns) > 0) and macd_cross and banker_act
     
+    squeeze_label = "NONE"
+    if is_sq_fired:
+        squeeze_label = "FIRED 🚀"
+    elif is_sq_now or is_sq_energy:
+        squeeze_label = "ENERGY ⚡"
+        
     return {
         'symbol': name,
         'pair': pair,
@@ -171,23 +198,19 @@ def analyze_coin(item):
         'macd_hist': round(df['hist'].iloc[-1], 6),
         'banker_active': banker_act,
         'banker_val': round(df['fundtrend'].iloc[-1], 1),
-        'is_buy_signal': is_buy_signal,
+        'core_technical_ok': core_technical_ok,
+        'is_squeeze_fired': is_sq_fired,
+        'is_squeeze_energy': is_sq_energy,
+        'squeeze_label': squeeze_label,
         'sl_price': round(cur_p * (1.0 - INITIAL_SL_PCT), 6),
         'tp1_price': round(cur_p * (1.0 + TP1_PCT), 6)
     }
 
 def scan_market():
     btc_status = check_btc_regime()
+    is_btc_bull = btc_status.get('is_bull', False)
     
-    # If BTC is bearish, strategy condition forbids buying
-    if not btc_status['is_bull']:
-        return {
-            'btc_status': btc_status,
-            'signals': [],
-            'reason': f"⛔ البيتكوين يتداول تحت متوسط Daily EMA50 ({btc_status['price']} $ < {btc_status['ema50']} $ بفارق {btc_status['diff_pct']}%) -> السوق في وضع حماية رأس المال."
-        }
-        
-    # If BTC is bullish, scan watchlist
+    # Scan all watchlist coins
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         scan_res = executor.map(analyze_coin, WATCHLIST)
@@ -195,12 +218,46 @@ def scan_market():
             if r is not None:
                 results.append(r)
                 
-    buy_signals = [r for r in results if r['is_buy_signal']]
+    buy_signals = []
+    
+    for r in results:
+        if r['core_technical_ok']:
+            has_squeeze = r['is_squeeze_fired'] or r['is_squeeze_energy']
+            
+            # Smart 3-Tier Classification
+            if has_squeeze and is_btc_bull:
+                r['tier'] = 1
+                r['tier_badge'] = "💎🚀 سوبر صاروخ (المستوى الأول)"
+                r['tier_desc'] = "انفجار سكويز + بيتكوين صاعد فوق EMA50 (أعلى أولوية)"
+                r['is_buy_signal'] = True
+                buy_signals.append(r)
+            elif has_squeeze and not is_btc_bull:
+                r['tier'] = 2
+                r['tier_badge'] = "⚡🚀 صاروخ مستقل (المستوى الثاني)"
+                r['tier_desc'] = "انفجار سكويز ذاتي (تتجاوز شرط البيتكوين بنجاح 80%+)"
+                r['is_buy_signal'] = True
+                buy_signals.append(r)
+            elif not has_squeeze and is_btc_bull:
+                r['tier'] = 3
+                r['tier_badge'] = "🟢 كلاسيكية معتمدة (المستوى الثالث)"
+                r['tier_desc'] = "شروط فنية كاملة مدعومة بصعود البيتكوين (بدون سكويز)"
+                r['is_buy_signal'] = True
+                buy_signals.append(r)
+            else:
+                # No squeeze AND BTC is bearish -> Strictly Forbidden!
+                r['tier'] = 0
+                r['is_buy_signal'] = False
+                
+    # Sort signals by Tier (Tier 1 first, then Tier 2, then Tier 3)
+    buy_signals.sort(key=lambda x: x['tier'])
     
     reason = ""
     if len(buy_signals) == 0:
-        reason = "ℹ️ البيتكوين في مسار صاعد، ولكن لم تكتمل شروط الشمعة الانعكاسية والدعم مع تقاطع الماكد معاً في أي عملة اليوم."
-        
+        if not is_btc_bull:
+            reason = f"🛡️ البيتكوين تحت Daily EMA50 ({btc_status['price']:,.1f} $ < {btc_status['ema50']:,.1f} $)، ولم يتم رصد أي عملة في وضع انفجار سكويز مستقل اليوم."
+        else:
+            reason = "ℹ️ البيتكوين في وضع صاعد، ولكن لم تكتمل شروط الشمعة والدعم والماكد معاً في أي عملة اليوم."
+            
     return {
         'btc_status': btc_status,
         'signals': buy_signals,

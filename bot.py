@@ -42,12 +42,13 @@ def format_radar_message():
         f"• <b>الفارق عن المتوسط:</b> <code>{btc['diff_pct']:+.2f}%</code>\n"
         f"• <b>حالة الاتجاه:</b> {status_icon}\n"
         f"• <b>تدفق سيولة المؤسسات:</b> {banker_icon} (مستوى {btc.get('banker_val')})\n"
+        f"• <b>نظام الأولويات:</b> SML Squeeze مفعل (3 مستويات)\n"
         f"────────────────────\n"
     )
     if btc['is_bull']:
-        msg += "✅ <b>الضوء الأخضر مُفعّل:</b> النظام مستعد لاقتناص فرص العملات البديلة المطابقة للخطة."
+        msg += "✅ <b>الضوء الأخضر مُفعّل:</b> النظام مستعد لاقتناص الصواريخ الخارقة 💎🚀 والصفقات الكلاسيكية 🟢."
     else:
-        msg += "🛡️ <b>وضع حماية رأس المال:</b> البيتكوين تحت EMA50، الدخول متوقف لتجنب فخاخ الهبوط."
+        msg += "🛡️ <b>البيتكوين تحت EMA50:</b> الصفقات الكلاسيكية متوقفة، ولكن الرادار يبحث عن <b>الصواريخ المستقلة (Squeeze Rockets ⚡🚀)</b> ذات الزخم الذاتي العالي!"
     return msg
 
 def format_report_message():
@@ -95,28 +96,17 @@ def format_report_message():
     return msg
 
 def execute_daily_scan(chat_id=None):
-    send_telegram_message(chat_id, "🔍 <b>جاري فحص جميع عملات القائمة (160 عملة) على فريم اليوم...</b>")
+    send_telegram_message(chat_id, f"🔍 <b>جاري فحص جميع أزواج بينانس ({len(config.WATCHLIST)} زوج) بنظام SML Squeeze الذكي...</b>")
     scan_res = scan_market()
     btc = scan_res['btc_status']
     signals = scan_res['signals']
     
-    if not btc['is_bull']:
-        msg = (
-            f"ℹ️ <b>تقرير المسح اليومي:</b>\n"
-            f"────────────────────\n"
-            f"❌ <b>لا توجد صفقات شراء اليوم.</b>\n"
-            f"<b>السبب:</b> البيتكوين ({btc['price']:,.1f} $) تحت متوسط Daily EMA50 ({btc['ema50']:,.1f} $).\n"
-            f"🛡️ تم تعليق الدخول لحماية المحفظة من تقلبات السوق."
-        )
-        send_telegram_message(chat_id, msg)
-        return
-        
     if not signals:
         msg = (
             f"ℹ️ <b>تقرير المسح اليومي:</b>\n"
             f"────────────────────\n"
-            f"• البيتكوين في وضع إيجابي فوق EMA50.\n"
-            f"• تم فحص {scan_res.get('all_scanned_count', 160)} عملة بالكامل.\n"
+            f"• <b>سعر البيتكوين:</b> <code>{btc['price']:,.1f} $</code> ({'فوق EMA50 🟢' if btc.get('is_bull') else 'تحت EMA50 🔴'})\n"
+            f"• <b>عدد العملات المفحوصة:</b> {scan_res.get('all_scanned_count', len(config.WATCHLIST))} عملة.\n"
             f"ℹ️ {scan_res['reason']}"
         )
         send_telegram_message(chat_id, msg)
@@ -128,7 +118,7 @@ def execute_daily_scan(chat_id=None):
     
     if available_slots <= 0:
         msg = (
-            f"🎯 <b>تم رصد {len(signals)} صفقة جديدة!</b>\n"
+            f"🎯 <b>تم رصد {len(signals)} فرصة مطابقة!</b>\n"
             f"⚠️ ولكن المحفظة ممتلئة بالكامل ({config.MAX_POSITIONS} صفقات مفتوحة).\n"
             f"سيتم الانتظار حتى تحقيق هدف لتفريغ كاش."
         )
@@ -146,6 +136,9 @@ def execute_daily_scan(chat_id=None):
         entry_p = sig['current_price']
         sl_p = sig['sl_price']
         tp1_p = sig['tp1_price']
+        tier_badge = sig.get('tier_badge', '🟢 صفقة مؤكدة')
+        tier_desc = sig.get('tier_desc', '')
+        sq_label = sig.get('squeeze_label', 'NONE')
         
         # Place Buy Order on Binance
         order, status_msg = client.place_market_buy(pair, pos_amount_usdt)
@@ -159,13 +152,16 @@ def execute_daily_scan(chat_id=None):
             trade_msg = (
                 f"🚀 <b>تم فتح صفقة شراء جديدة: {sym} / USDT</b>\n"
                 f"────────────────────\n"
+                f"• <b>التصنيف:</b> {tier_badge}\n"
+                f"• <b>تفاصيل القوة:</b> {tier_desc}\n"
+                f"• <b>حالة الـ Squeeze:</b> <code>{sq_label}</code>\n"
                 f"• <b>سعر الدخول:</b> <code>{entry_p} $</code>\n"
                 f"• <b>حجم الصفقة:</b> 25% (~ <code>{pos_amount_usdt:,.1f} USDT</code>)\n"
-                f"• <b>النموذج المكتشف:</b> {', '.join(sig['patterns'])}\n"
+                f"• <b>النماذج الفنية:</b> {', '.join(sig['patterns'])}\n"
                 f"• <b>الهدف الأول (+10%):</b> <code>{tp1_p} $</code> (بيع 50%)\n"
                 f"• <b>وقف الخسارة الأولي (-6%):</b> <code>{sl_p} $</code>\n"
                 f"────────────────────\n"
-                f"🛡️ <b>الحماية التلقائية:</b> {oco_msg}\n"
+                f"🛡️ <b>الحماية التلقائية (Binance OCO):</b> {oco_msg}\n"
                 f"ℹ️ أمر البيع ووقف الخسارة مسجلين داخل سيستم باينانس مباشرة واللاب توب مغلق تماماً!"
             )
             send_telegram_message(chat_id, trade_msg)
@@ -266,14 +262,14 @@ def handle_telegram_updates():
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
                         welcome = (
-                            f"👋 <b>أهلاً بك في بوت التداول الآلي (CM MACD & Banker Flow)!</b>\n"
+                            f"👋 <b>أهلاً بك في بوت التداول الآلي (CM MACD & SML Squeeze Pro)!</b>\n"
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n\n"
                             f"الأوامر المتاحة:\n"
                             f"• اكتب <b>تقرير</b>: لعرض الصفقات المفتوحة ورصيد المحفظة.\n"
-                            f"• اكتب <b>رادار</b>: لمعرفة وضع البيتكوين وسيولة الحيتان.\n"
+                            f"• اكتب <b>رادار</b>: لمعرفة وضع البيتكوين وسيولة الحيتان ونظام السكويز.\n"
                             f"• اكتب <b>اتصال</b>: للتأكد من حالة الاتصال بحسابك في باينانس.\n"
-                            f"• اكتب <b>فحص</b>: لتشغيل مسح فوري لـ 160 عملة الآن."
+                            f"• اكتب <b>فحص</b>: لتشغيل مسح فوري لـ 173 عملة الآن بالـ 3 مستويات."
                         )
                         send_telegram_message(chat_id, welcome)
                         
