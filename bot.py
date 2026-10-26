@@ -150,8 +150,11 @@ def execute_daily_scan(chat_id=None):
         # Place Buy Order on Binance
         order, status_msg = client.place_market_buy(pair, pos_amount_usdt)
         if order:
-            qty = order.get('executedQty', pos_amount_usdt / entry_p)
+            qty = float(order.get('executedQty', pos_amount_usdt / entry_p))
             db.add_trade(sym, pair, entry_p, qty, tp1_p, sl_p)
+            
+            # Place Native OCO Order directly on Binance for 50% of the position!
+            oco_order, oco_msg = client.place_native_oco_order(pair, qty * config.TP1_SELL_RATIO, tp1_p, sl_p)
             
             trade_msg = (
                 f"🚀 <b>تم فتح صفقة شراء جديدة: {sym} / USDT</b>\n"
@@ -159,11 +162,11 @@ def execute_daily_scan(chat_id=None):
                 f"• <b>سعر الدخول:</b> <code>{entry_p} $</code>\n"
                 f"• <b>حجم الصفقة:</b> 25% (~ <code>{pos_amount_usdt:,.1f} USDT</code>)\n"
                 f"• <b>النموذج المكتشف:</b> {', '.join(sig['patterns'])}\n"
-                f"• <b>قناة الدعم:</b> <code>{sig['support_level']} $</code>\n"
                 f"• <b>الهدف الأول (+10%):</b> <code>{tp1_p} $</code> (بيع 50%)\n"
                 f"• <b>وقف الخسارة الأولي (-6%):</b> <code>{sl_p} $</code>\n"
                 f"────────────────────\n"
-                f"ℹ️ الحالة: {status_msg}"
+                f"🛡️ <b>الحماية التلقائية:</b> {oco_msg}\n"
+                f"ℹ️ أمر البيع ووقف الخسارة مسجلين داخل سيستم باينانس مباشرة واللاب توب مغلق تماماً!"
             )
             send_telegram_message(chat_id, trade_msg)
         else:
@@ -269,6 +272,7 @@ def handle_telegram_updates():
                             f"الأوامر المتاحة:\n"
                             f"• اكتب <b>تقرير</b>: لعرض الصفقات المفتوحة ورصيد المحفظة.\n"
                             f"• اكتب <b>رادار</b>: لمعرفة وضع البيتكوين وسيولة الحيتان.\n"
+                            f"• اكتب <b>اتصال</b>: للتأكد من حالة الاتصال بحسابك في باينانس.\n"
                             f"• اكتب <b>فحص</b>: لتشغيل مسح فوري لـ 160 عملة الآن."
                         )
                         send_telegram_message(chat_id, welcome)
@@ -278,6 +282,10 @@ def handle_telegram_updates():
                         
                     elif text_lower in ["رادار", "الرادار", "/radar", "radar"]:
                         send_telegram_message(chat_id, format_radar_message())
+                        
+                    elif text_lower in ["اتصال", "باينانس", "بينانس", "/ping", "ping"]:
+                        res = client.check_connection()
+                        send_telegram_message(chat_id, res['message'])
                         
                     elif text_lower in ["فحص", "مسح", "/scan", "scan"]:
                         execute_daily_scan(chat_id)

@@ -12,13 +12,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8909689391:AAHFmjfhzVJXumN
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7760401819")
 
 # Binance API Credentials
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "PPkG8M8twsNEXEZonYHWOxsikxV3RV5R4SfvLVXNyulMCuWIZlOJciKgQu0F7ZeF")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "WVIDdEr3XMs6XVYQa4MEuXfBAqmhjfOf5vZj7FV6ID9qm0ulC0Qmgn8M2MhmA9TI")
 
 # Operational Mode
-# DRY_RUN = True means it will track and simulate trades with live prices without risking real money
-# Set DRY_RUN = False when Binance API keys with spot trading permissions are added!
-DRY_RUN = os.getenv("DRY_RUN", "True").lower() in ("true", "1", "yes")
+# DRY_RUN = False activates LIVE TRADING with real Binance funds!
+DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes")
 
 # Strategy Rules (Plan 2)
 TIMEFRAME = "1d"
