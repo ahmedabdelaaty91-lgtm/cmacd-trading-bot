@@ -9,7 +9,7 @@ except ImportError:
 
 # Telegram Credentials
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8909689391:AAHFmjfhzVJXumN3lWBzrFtpne3SJ9tC6-Q")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7760401819")
 
 # Binance API Credentials
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
@@ -30,7 +30,8 @@ TP1_PCT = 0.10           # +10% First Take Profit
 TP1_SELL_RATIO = 0.50    # Sell 50% of position at TP1
 SL_AFTER_TP1_PCT = 0.01  # Move SL to Entry + 1% after TP1
 
-# Base Binance API URLs
+# Base Binance API URLs (binance.vision is geo-unrestricted for Cloud/GitHub Actions)
+BINANCE_DATA_URL = "https://data-api.binance.vision"
 BINANCE_REST_URL = "https://api.binance.com"
 
 # Load Watchlist

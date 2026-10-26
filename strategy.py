@@ -3,30 +3,35 @@ import pandas as pd
 import requests
 import json
 import concurrent.futures
-from config import BINANCE_REST_URL, WATCHLIST, BTC_EMA_PERIOD, INITIAL_SL_PCT, TP1_PCT
+from config import BINANCE_DATA_URL, BINANCE_REST_URL, WATCHLIST, BTC_EMA_PERIOD, INITIAL_SL_PCT, TP1_PCT
 
 def calc_rma(series, length):
     alpha = 1.0 / length
     return series.ewm(alpha=alpha, adjust=False).mean()
 
 def fetch_klines(symbol, interval="1d", limit=120):
-    url = f"{BINANCE_REST_URL}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if len(data) < 40:
-                return None
-            df = pd.DataFrame(data, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_asset_volume', 'trades', 'taker_base', 'taker_quote', 'ignore'
-            ])
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = df[col].astype(float)
-            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-    except Exception:
-        return None
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    # Try data-api.binance.vision first (ideal for cloud/GitHub Actions)
+    urls = [
+        f"{BINANCE_DATA_URL}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"{BINANCE_REST_URL}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                if len(data) >= 40:
+                    df = pd.DataFrame(data, columns=[
+                        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                        'close_time', 'quote_asset_volume', 'trades', 'taker_base', 'taker_quote', 'ignore'
+                    ])
+                    for col in ['open', 'high', 'low', 'close', 'volume']:
+                        df[col] = df[col].astype(float)
+                    df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    return df
+        except Exception:
+            continue
     return None
 
 def check_btc_regime():

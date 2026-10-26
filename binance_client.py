@@ -3,7 +3,7 @@ import hmac
 import hashlib
 import requests
 import json
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_REST_URL, DRY_RUN
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_REST_URL, BINANCE_DATA_URL, DRY_RUN
 
 class BinanceClient:
     def __init__(self):
@@ -22,12 +22,18 @@ class BinanceClient:
         return query_string + f"&signature={signature}"
         
     def get_ticker_price(self, pair):
-        try:
-            r = requests.get(f"{BINANCE_REST_URL}/api/v3/ticker/price?symbol={pair}", timeout=5)
-            if r.status_code == 200:
-                return float(r.json()['price'])
-        except Exception:
-            pass
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        urls = [
+            f"{BINANCE_DATA_URL}/api/v3/ticker/price?symbol={pair}",
+            f"{BINANCE_REST_URL}/api/v3/ticker/price?symbol={pair}"
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, headers=headers, timeout=5)
+                if r.status_code == 200:
+                    return float(r.json()['price'])
+            except Exception:
+                continue
         return None
 
     def get_usdt_balance(self):
