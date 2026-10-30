@@ -123,6 +123,15 @@ def format_advisory_signal_message(sig, btc_status):
     tier_badge = sig['tier_badge']
     tier_desc = sig['tier_desc']
     
+    warning_box = ""
+    if sig.get('btc_warning') or not btc_status.get('is_bull'):
+        warning_box = (
+            f"⚠️ <b>ملاحظة هامة (خد بالك):</b>\n"
+            f"• وضع البيتكوين حالياً <b>مش حلو (تحت Daily EMA50 عند {btc_status['price']:,.1f} $)</b>.\n"
+            f"• العملة محققة الشروط الفنية الـ 4 كاملة ومستعدة ذاتياً (دعم + سكويز + ماكد + بانكر)، ولكن بسبب سلبية البيتكوين يرجى الحذر الشديد والالتزام الصارم بوقف الخسارة المقترح!\n"
+            f"────────────────────\n"
+        )
+
     msg = (
         f"{tier_badge}\n"
         f"────────────────────\n"
@@ -139,8 +148,9 @@ def format_advisory_signal_message(sig, btc_status):
         f"🏦 <b>4. مؤشر السيولة L3 Banker:</b>\n"
         f"{sig['banker_desc']}\n\n"
         f"🌐 <b>5. وضع البيتكوين والسوق:</b>\n"
-        f"• السعر <code>{btc_status['price']:,.1f} $</code> ({'فوق Daily EMA50 🟢 - مسار آمن' if btc_status.get('is_bull') else 'تحت Daily EMA50 🔴'})\n"
+        f"• السعر <code>{btc_status['price']:,.1f} $</code> ({'فوق Daily EMA50 🟢 - مسار آمن' if btc_status.get('is_bull') else 'تحت Daily EMA50 🔴 - هابط / تصحيحي'})\n"
         f"────────────────────\n"
+        f"{warning_box}"
         f"🎯 <b>المستويات الفنية المقترحة للمتابعة:</b>\n"
         f"• 🎯 <b>الهدف الأول (+4.0%):</b> <code>{sig['tp1_price']} $</code>\n"
         f"• 🚀 <b>الهدف الثاني (+8.0%):</b> <code>{sig['tp2_price']} $</code>\n"

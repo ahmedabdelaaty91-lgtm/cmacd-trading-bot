@@ -296,21 +296,31 @@ def scan_market():
         if not core_met:
             continue
             
-        # Tier 1 (VIP Gold 5/5): Core 3 + Squeeze + Volume Spike >= 1.20x + BTC Bull
-        if r['has_squeeze'] and r['vol_spike'] and is_btc_bull:
-            r['tier'] = 1
-            r['tier_badge'] = "💎🚀 إشارة ذهبية VIP (5/5 كاملة)"
-            r['tier_desc'] = "محققة كامل الشروط الـ 5 مع طفرة فوليوم وانفجار سكويز (دقة تاريخية 71%)"
-            signals.append(r)
-        # Tier 2 (Core Silver 4/4): Core 3 + (Squeeze OR Vol Spike OR BTC Safe)
+        # Case 1: All 4 indicators met (Support + Squeeze + MACD + Banker)
+        if r['has_squeeze']:
+            if is_btc_bull:
+                r['tier'] = 1
+                r['tier_badge'] = "💎🚀 إشارة ذهبية VIP (5/5 كاملة - السوق صاعد)"
+                r['tier_desc'] = "محققة كامل الشروط الـ 5 مع طفرة فوليوم وانفجار سكويز ودعم البيتكوين"
+                r['btc_warning'] = False
+                signals.append(r)
+            else:
+                # BTC is NOT bull, but the 4 indicators are completely fulfilled!
+                r['tier'] = 2
+                r['tier_badge'] = "⚡🚀 صاروخ فني مستقل (4/4 مؤشرات كاملة)"
+                r['tier_desc'] = "محققة كامل الشروط الفنية الـ 4 ذاتياً (دعم + سكويز + ماكد + بانكر)"
+                r['btc_warning'] = True
+                signals.append(r)
+        # Case 2: Core met without active squeeze, but BTC is bull
         elif is_btc_bull:
-            r['tier'] = 2
+            r['tier'] = 3
             r['tier_badge'] = "🟢 إشارة قياسية معتمدة (4/4 كاملة)"
-            r['tier_desc'] = "محققة الأركان الـ 4 الأساسية بدعم صاعد من البيتكوين"
+            r['tier_desc'] = "محققة الأركان الأساسية بدعم صاعد من البيتكوين"
+            r['btc_warning'] = False
             signals.append(r)
             
     # Priority Sorting:
-    # 1. Tier 1 first, then Tier 2
+    # 1. Tier 1 first, then Tier 2, then Tier 3
     # 2. Inside each Tier, highest 24H volume first!
     signals.sort(key=lambda x: (x['tier'], -x['quote_volume_24h']))
     
