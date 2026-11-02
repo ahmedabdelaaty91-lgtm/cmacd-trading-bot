@@ -3,6 +3,7 @@ import hmac
 import hashlib
 import requests
 import json
+import config
 from config import BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_REST_URL, BINANCE_DATA_URL, DRY_RUN
 
 class BinanceClient:
@@ -152,6 +153,9 @@ class BinanceClient:
         return 0.0
 
     def place_market_buy(self, pair, quote_amount_usdt):
+        if not getattr(config, 'AUTO_TRADE', False):
+            return None, "التداول الآلي معطل (Advisory Mode)"
+            
         cur_price = self.get_ticker_price(pair)
         if not cur_price:
             return None, "فشل جلب السعر اللحظي من باينانس"
@@ -455,6 +459,9 @@ class BinanceClient:
             return False, f"خطأ في الإلغاء: {e}"
 
     def place_market_sell(self, pair, quantity=None):
+        if not getattr(config, 'AUTO_TRADE', False):
+            return None, "التداول الآلي معطل (Advisory Mode)"
+            
         cur_price = self.get_ticker_price(pair)
         if not cur_price:
             return None, "فشل جلب السعر اللحظي"

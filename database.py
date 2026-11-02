@@ -29,14 +29,6 @@ def init_db():
     )
     """)
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS balance_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT,
-        total_balance REAL,
-        cash REAL
-    )
-    """)
-    cur.execute("""
     CREATE TABLE IF NOT EXISTS alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol TEXT,
@@ -47,85 +39,83 @@ def init_db():
         details TEXT
     )
     """)
-    conn.commit()
-    
-    # Ensure newly added columns exist in older database files
-    cur.execute("PRAGMA table_info(trades)")
-    cols = [c[1] for c in cur.fetchall()]
-    if 'tp2_price' not in cols:
-        cur.execute("ALTER TABLE trades ADD COLUMN tp2_price REAL")
-    if 'initial_quantity' not in cols:
-        cur.execute("ALTER TABLE trades ADD COLUMN initial_quantity REAL")
-    if 'remaining_quantity' not in cols:
-        cur.execute("ALTER TABLE trades ADD COLUMN remaining_quantity REAL")
-    conn.commit()
-    conn.close()
-
-def add_trade(symbol, pair, entry_price, quantity, tp1_price, tp2_price, sl_price):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute("""
-    INSERT INTO trades (
-        symbol, pair, entry_price, current_price, quantity, initial_quantity, remaining_quantity, 
-        entry_date, status, tp1_price, tp2_price, sl_price
+    CREATE TABLE IF NOT EXISTS signal_states (
+        pair TEXT PRIMARY KEY,
+        symbol TEXT,
+        date_str TEXT,
+        strategy_name TEXT,
+        tier_badge TEXT,
+        price REAL,
+        tp_price REAL,
+        sl_price REAL,
+        be_price REAL,
+        tp_pct REAL,
+        sl_pct REAL,
+        be_pct REAL,
+        mtf_confirmed INTEGER,
+        mtf_notified INTEGER,
+        last_updated TEXT
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-    """, (symbol, pair, entry_price, entry_price, quantity, quantity, quantity, now_str, tp1_price, tp2_price, sl_price))
+    """)
     conn.commit()
     conn.close()
 
-def get_open_trades():
+def get_signal_state(pair, date_str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT * FROM trades WHERE status IN ('OPEN', 'TP1_HIT', 'TP2_HIT')")
-    rows = cur.fetchall()
+    cur.execute("SELECT * FROM signal_states WHERE pair = ? AND date_str = ?", (pair, date_str))
+    row = cur.fetchone()
     conn.close()
-    return [dict(r) for r in rows]
+    return dict(row) if row else None
 
-def update_tp1_hit(trade_id, remaining_qty, new_sl_price):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-    UPDATE trades 
-    SET status = 'TP1_HIT', remaining_quantity = ?, sl_price = ?
-    WHERE id = ?
-    """, (remaining_qty, new_sl_price, trade_id))
-    conn.commit()
-    conn.close()
-
-def update_tp2_hit(trade_id, remaining_qty, new_sl_price):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-    UPDATE trades 
-    SET status = 'TP2_HIT', remaining_quantity = ?, sl_price = ?
-    WHERE id = ?
-    """, (remaining_qty, new_sl_price, trade_id))
-    conn.commit()
-    conn.close()
-
-def close_trade(trade_id, exit_price, pnl_pct, reason):
+def save_or_update_signal_state(pair, symbol, date_str, sig, mtf_notified=0):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute("""
-    UPDATE trades 
-    SET status = 'CLOSED', remaining_quantity = 0, exit_price = ?, exit_date = ?, pnl_pct = ?, exit_reason = ?
-    WHERE id = ?
-    """, (exit_price, now_str, pnl_pct, reason, trade_id))
+    INSERT INTO signal_states (
+        pair, symbol, date_str, strategy_name, tier_badge, price,
+        tp_price, sl_price, be_price, tp_pct, sl_pct, be_pct,
+        mtf_confirmed, mtf_notified, last_updated
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(pair) DO UPDATE SET
+        date_str = excluded.date_str,
+        strategy_name = excluded.strategy_name,
+        tier_badge = excluded.tier_badge,
+        price = excluded.price,
+        tp_price = excluded.tp_price,
+        sl_price = excluded.sl_price,
+        be_price = excluded.be_price,
+        tp_pct = excluded.tp_pct,
+        sl_pct = excluded.sl_pct,
+        be_pct = excluded.be_pct,
+        mtf_confirmed = excluded.mtf_confirmed,
+        mtf_notified = CASE WHEN excluded.mtf_notified = 1 THEN 1 ELSE signal_states.mtf_notified END,
+        last_updated = excluded.last_updated
+    """, (
+        pair, symbol, date_str, sig['strategy_name'], sig['tier_badge'], sig['current_price'],
+        sig['tp_price'], sig['sl_price'], sig['be_price'], sig['tp_pct'], sig['sl_pct'], sig['be_pct'],
+        1 if sig.get('mtf_confirmed') else 0, mtf_notified, now_str
+    ))
     conn.commit()
     conn.close()
 
-def get_closed_trades(limit=10):
+def mark_mtf_notified(pair, date_str):
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT * FROM trades WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?", (limit,))
-    rows = cur.fetchall()
+    cur.execute("UPDATE signal_states SET mtf_confirmed = 1, mtf_notified = 1 WHERE pair = ? AND date_str = ?", (pair, date_str))
+    conn.commit()
     conn.close()
-    return [dict(r) for r in rows]
+
+def clean_old_signal_states(current_date_str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM signal_states WHERE date_str != ?", (current_date_str,))
+    conn.commit()
+    conn.close()
 
 def was_alerted_today(symbol, date_str):
     conn = sqlite3.connect(DB_PATH)
@@ -145,5 +135,4 @@ def record_alert(symbol, pair, date_str, tier, price, details):
     conn.commit()
     conn.close()
 
-# Initialize tables
 init_db()
