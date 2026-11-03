@@ -100,13 +100,13 @@ def check_4h_confirmation(pair):
     confirmed = is_trend_ok and is_rsi_ok
     if confirmed:
         badge = "✅ مؤكد متطابق 4H (4H Confirmed)"
-        details = f"السعر متماسك فوق 4H EMA20 ({cur_p:,.4f} >= {ema20_4h:,.4f}) وزخم 4H RSI متوازن وصاعد ({rsi_4h:.1f})"
+        details = f"السعر متماسك فوق 4H EMA20 (السعر {cur_p:,.4f} أعلى من {ema20_4h:,.4f}) وزخم 4H RSI متوازن وصاعد ({rsi_4h:.1f})"
     elif rsi_4h > 74.0:
         badge = "⚠️ 4H متضخم لحظياً (Overbought)"
         details = f"مؤشر 4H RSI مرتفع ({rsi_4h:.1f}) - يفضل انتظار تهدئة طفيفة لشمعة 4H قبل التنفيذ"
     else:
         badge = "⏳ بانتظار شمعة 4H خضراء مؤكدة"
-        details = f"السعر دون 4H EMA20 ({cur_p:,.4f} < {ema20_4h:,.4f}) - انتظر ارتداد لحظي للشمعة الحالية"
+        details = f"السعر دون 4H EMA20 (السعر {cur_p:,.4f} أدنى من {ema20_4h:,.4f}) - انتظر ارتداد لحظي للشمعة الحالية"
         
     return {
         'confirmed': confirmed,
@@ -226,6 +226,15 @@ def analyze_coin_1d(item):
 
     # Proven Dual Filter: Institutional Volume Benchmark (VWAP) + Price At Support
     is_dual_filter = bool(above_vwap and at_support)
+    
+    # -------------------------------------------------------------
+    # STRICT DUAL FILTER MANDATE:
+    # A setup is ONLY valid and alerted if BOTH conditions are met:
+    # 1. Price is at or above Institutional VWAP (Cur Price >= VWAP)
+    # 2. Price is resting directly on Horizontal Support (Pivot Low <= 3%)
+    # -------------------------------------------------------------
+    if not is_dual_filter:
+        return None
             
     # Banker Flow
     h27 = h.rolling(27).max()
@@ -244,73 +253,37 @@ def analyze_coin_1d(item):
     banker_active = bool((fundtrend.iloc[-1] > bullbearline.iloc[-1]) or (fundtrend.iloc[-1] > 50))
 
     # -------------------------------------------------------------
-    # Match Against Ranked Golden Strategies (Highest Win Rate First)
+    # Match Against Ranked Golden Strategies (All with Dual Filter 80.3% - 90.5%)
     # -------------------------------------------------------------
     matched_strat = None
     
-    # Tier 0: Crown VIP Dual-Filter (85% - 90.5% Win Rate with Dual Filter)
-    if bb_breakout and is_dual_filter:
+    # 1. Bollinger Bands Breakout with Dual Filter (Win Rate 90.5% | PF 9.21)
+    if bb_breakout:
         matched_strat = ("انفجار البولنجر مع الفلتر المزدوج (VWAP + دعم)", "👑 90.5% | انفجار البولنجر + فلتر مزدوج", 90.5, 9.21, 0.045, 0.035, 0.020, 0)
-    elif cross_9_21 and above_cloud:
-        matched_strat = ("تقاطع EMA 9/21 + فوق سحابة إيشيموكو", "👑 88.0% | EMA 9/21 فوق السحابة", 88.0, 6.12, 0.06, 0.045, 0.025, 0)
-    elif cross_20_100 and is_dual_filter:
-        matched_strat = ("تقاطع EMA 20/100 مع الفلتر المزدوج (VWAP + دعم)", "👑 88.0% | EMA 20/100 + فلتر مزدوج", 88.0, 4.50, 0.045, 0.035, 0.020, 0)
-    elif kumo_breakout and is_dual_filter:
-        matched_strat = ("اختراق سحابة إيشيموكو مع الفلتر المزدوج (VWAP + دعم)", "👑 87.0% | اختراق سحابة + فلتر مزدوج", 87.0, 4.88, 0.06, 0.045, 0.025, 0)
-    elif cross_50_200 and is_dual_filter:
-        matched_strat = ("التقاطع الذهبي EMA 50/200 مع الفلتر المزدوج", "🌟 85.0% | التقاطع الذهبي + فلتر مزدوج", 85.0, 4.10, 0.045, 0.035, 0.020, 0)
-    elif macd_below_zero and is_dual_filter:
-        matched_strat = ("تقاطع MACD تحت الصفر مع الفلتر المزدوج (قاع + VWAP + دعم)", "👑 85.0% | MACD ارتداد من القاع + فلتر مزدوج", 85.0, 5.59, 0.06, 0.045, 0.025, 0)
-
-    # Tier 1: Diamond Tier (80% - 84.9%)
-    elif kumo_breakout and vol_spike:
-        matched_strat = ("اختراق سحابة إيشيموكو + طفرة فوليوم", "☁️ 83.9% | اختراق سحابة بفوليوم", 83.9, 4.20, 0.06, 0.045, 0.025, 1)
-    elif cross_9_21 and is_dual_filter:
-        matched_strat = ("توليفة VIP لـ EMA 9/21 مع الفلتر المزدوج (VWAP + دعم)", "💎 83.5% | EMA 9/21 + فلتر مزدوج", 83.5, 4.32, 0.06, 0.045, 0.025, 1)
-    elif cross_9_21 and at_support and above_ema50:
-        matched_strat = ("توليفة VIP لـ EMA 9/21 (دعم + فوق EMA 50)", "💎 83.5% | توليفة VIP EMA 9/21", 83.5, 4.32, 0.06, 0.045, 0.025, 1)
-    elif cross_50_100 and is_dual_filter:
-        matched_strat = ("تقاطع EMA 50/100 مع الفلتر المزدوج (VWAP + دعم)", "💎 83.0% | EMA 50/100 + فلتر مزدوج", 83.0, 3.50, 0.045, 0.035, 0.020, 1)
-    elif bb_breakout:
-        matched_strat = ("انفجار البولنجر بعد انضغاط (هدف خاطف)", "💣 82.7% | انفجار البولنجر الخاطف", 82.7, 4.12, 0.045, 0.035, 0.020, 1)
-    elif cross_9_21 and above_ema50:
-        matched_strat = ("تقاطع EMA 9/21 + فوق EMA 50 (ترند صاعد)", "🚀 82.7% | EMA 9/21 فوق EMA 50", 82.7, 3.99, 0.06, 0.045, 0.025, 1)
-    elif cross_9_21 and vol_spike:
-        matched_strat = ("تقاطع EMA 9/21 + طفرة فوليوم", "⚡ 81.6% | EMA 9/21 بطفرة فوليوم", 81.6, 3.94, 0.06, 0.045, 0.025, 1)
-    elif cross_20_50 and is_dual_filter:
-        matched_strat = ("توليفة VIP لـ EMA 20/50 مع الفلتر المزدوج (VWAP + دعم)", "💎 81.5% | EMA 20/50 + فلتر مزدوج", 81.5, 3.10, 0.06, 0.045, 0.025, 1)
-    elif cross_20_50 and at_support and vol_spike:
-        matched_strat = ("توليفة VIP لـ EMA 20/50 (دعم + فوليوم)", "💎 81.2% | توليفة VIP EMA 20/50", 81.2, 2.82, 0.06, 0.045, 0.025, 1)
-    elif rsi_cross and is_dual_filter:
-        matched_strat = ("تقاطع خط RSI مع الفلتر المزدوج (VWAP + دعم)", "💎 80.3% | RSI ارتداد + فلتر مزدوج", 80.3, 2.93, 0.06, 0.045, 0.025, 1)
-
-    # Tier 2: Gold Tier (77% - 79.9%)
-    elif kumo_breakout:
-        matched_strat = ("اختراق سحابة إيشيموكو قياسي", "☁️ 79.3% | اختراق سحابة إيشيموكو", 79.3, 2.64, 0.06, 0.045, 0.025, 2)
-    elif cross_50_200:
-        matched_strat = ("التقاطع الذهبي الكلاسيكي (EMA 50/200)", "🌟 79.2% | التقاطع الذهبي الكلاسيكي", 79.2, 3.09, 0.045, 0.035, 0.020, 2)
-    elif cross_9_21 and at_support:
-        matched_strat = ("تقاطع EMA 9/21 + ارتكاز على دعم أفقي", "🛡️ 77.1% | EMA 9/21 عند الدعم", 77.1, 2.76, 0.06, 0.045, 0.025, 2)
-    elif macd_below_zero and at_support:
-        matched_strat = ("تقاطع MACD تحت الصفر + دعم أفقي", "📊 77.0% | MACD ارتداد من القاع والدعم", 77.0, 2.49, 0.06, 0.045, 0.025, 2)
-    elif cross_9_21:
-        matched_strat = ("تقاطع EMA 9/21 بهدف خاطف سريع", "🎯 76.4% | EMA 9/21 هدف خاطف", 76.4, 3.27, 0.040, 0.030, 0.020, 2)
-
-    # Tier 3: Silver Tier (71.9% - 76.9%)
-    elif cross_50_100:
-        matched_strat = ("تقاطع EMA 50/100 بهدف خاطف", "🎯 76.7% | تقاطع EMA 50/100", 76.7, 2.44, 0.045, 0.035, 0.020, 3)
-    elif cross_20_50 and above_cloud:
-        matched_strat = ("تقاطع EMA 20/50 + فوق سحابة إيشيموكو", "🚀 76.2% | EMA 20/50 فوق السحابة", 76.2, 2.18, 0.06, 0.045, 0.025, 3)
-    elif macd_below_zero and banker_active:
-        matched_strat = ("تقاطع MACD تحت الصفر + سيولة الحيتان", "💎 76.2% | MACD تحت الصفر + حيتان", 76.2, 2.46, 0.06, 0.045, 0.025, 3)
-    elif cross_20_50:
-        matched_strat = ("تقاطع EMA 20/50 بهدف خاطف سريع", "🔥 75.9% | EMA 20/50 هدف خاطف", 75.9, 2.33, 0.045, 0.035, 0.020, 3)
+    # 2. EMA 20/100 Cross with Dual Filter (Win Rate 88.0% | PF 4.50)
     elif cross_20_100:
-        matched_strat = ("تقاطع EMA 20/100 بهدف خاطف", "🎯 75.5% | تقاطع EMA 20/100", 75.5, 2.13, 0.045, 0.035, 0.020, 3)
-    elif cross_20_50 and at_support:
-        matched_strat = ("تقاطع EMA 20/50 + ارتكاز على دعم أفقي", "🛡️ 74.4% | EMA 20/50 عند الدعم", 74.4, 1.92, 0.06, 0.045, 0.025, 3)
-    elif rsi_cross and at_support:
-        matched_strat = ("تقاطع خط RSI (البنفسجي فوق الأصفر) + دعم", "🏆 71.9% | ارتداد RSI صعوداً من الدعم", 71.9, 1.50, 0.06, 0.045, 0.025, 3)
+        matched_strat = ("تقاطع EMA 20/100 مع الفلتر المزدوج (VWAP + دعم)", "👑 88.0% | EMA 20/100 + فلتر مزدوج", 88.0, 4.50, 0.045, 0.035, 0.020, 0)
+    # 3. Ichimoku Cloud Breakout with Dual Filter (Win Rate 87.0% | PF 4.88)
+    elif kumo_breakout:
+        matched_strat = ("اختراق سحابة إيشيموكو مع الفلتر المزدوج (VWAP + دعم)", "👑 87.0% | اختراق سحابة + فلتر مزدوج", 87.0, 4.88, 0.060, 0.045, 0.025, 0)
+    # 4. Golden Cross EMA 50/200 with Dual Filter (Win Rate 85.0% | PF 4.10)
+    elif cross_50_200:
+        matched_strat = ("التقاطع الذهبي EMA 50/200 مع الفلتر المزدوج", "🌟 85.0% | التقاطع الذهبي + فلتر مزدوج", 85.0, 4.10, 0.045, 0.035, 0.020, 0)
+    # 5. MACD below Zero Cross with Dual Filter (Win Rate 85.0% | PF 5.59)
+    elif macd_below_zero:
+        matched_strat = ("تقاطع MACD تحت الصفر مع الفلتر المزدوج (قاع + VWAP + دعم)", "👑 85.0% | MACD ارتداد من القاع + فلتر مزدوج", 85.0, 5.59, 0.060, 0.045, 0.025, 0)
+    # 6. EMA 9/21 Cross with Dual Filter (Win Rate 83.5% | PF 4.32)
+    elif cross_9_21:
+        matched_strat = ("تقاطع EMA 9/21 مع الفلتر المزدوج (VWAP + دعم)", "💎 83.5% | EMA 9/21 + فلتر مزدوج", 83.5, 4.32, 0.060, 0.045, 0.025, 1)
+    # 7. EMA 50/100 Cross with Dual Filter (Win Rate 83.0% | PF 3.50)
+    elif cross_50_100:
+        matched_strat = ("تقاطع EMA 50/100 مع الفلتر المزدوج (VWAP + دعم)", "💎 83.0% | EMA 50/100 + فلتر مزدوج", 83.0, 3.50, 0.045, 0.035, 0.020, 1)
+    # 8. EMA 20/50 Cross with Dual Filter (Win Rate 81.5% | PF 3.10)
+    elif cross_20_50:
+        matched_strat = ("تقاطع EMA 20/50 مع الفلتر المزدوج (VWAP + دعم)", "💎 81.5% | EMA 20/50 + فلتر مزدوج", 81.5, 3.10, 0.060, 0.045, 0.025, 1)
+    # 9. RSI Line Cross with Dual Filter (Win Rate 80.3% | PF 2.93)
+    elif rsi_cross:
+        matched_strat = ("تقاطع خط RSI مع الفلتر المزدوج (VWAP + دعم)", "💎 80.3% | RSI ارتداد + فلتر مزدوج", 80.3, 2.93, 0.060, 0.045, 0.025, 1)
 
     if not matched_strat:
         return None
@@ -349,9 +322,9 @@ def analyze_coin_1d(item):
         'vwap_val': vwap_val,
         'vwap_diff_pct': vwap_diff_pct,
         'is_dual_filter': is_dual_filter,
-        'vwap_desc': f"فوق متوسط سيولة الحيتان VWAP ({cur_p:,.4f} >= {vwap_val:,.4f}) 🟢" if above_vwap else f"أقل من متوسط سيولة VWAP ({cur_p:,.4f} < {vwap_val:,.4f}) 🟡",
-        'support_desc': "مرتكزة مباشرة على خط دعم أفقي قوي 🟢" if at_support else "السعر يتداول فوق أقرب مستوى دعم ⚪",
-        'dual_filter_desc': "مكتمل بنجاح (فوق VWAP + ارتكاز على دعم أفقي) 🏆" if is_dual_filter else "تأكيد جزئي ⚪",
+        'vwap_desc': f"السعر متماسك فوق متوسط سيولة الحيتان (السعر {cur_p:,.4f} أعلى من {vwap_val:,.4f}) 🟢",
+        'support_desc': "مرتكزة مباشرة على خط دعم أفقي قوي 🟢",
+        'dual_filter_desc': "مؤكد ومكتمل بنجاح (فوق VWAP + ارتكاز على خط دعم قوي) 🟢",
         'above_cloud': above_cloud,
         'vol_spike': vol_spike,
         'banker_active': banker_active,

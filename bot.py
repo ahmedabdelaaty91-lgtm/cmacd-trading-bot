@@ -10,23 +10,42 @@ from binance_client import BinanceClient
 
 client = BinanceClient()
 
+import re
+
+def clean_telegram_html(text):
+    """
+    Safely escapes stray <, >, and & characters that are not part of valid Telegram HTML tags
+    (<b>, </b>, <code>, </code>, <i>, </i>, <u>, </u>, <s>, </s>, <pre>, </pre>, <a href="...">, </a>).
+    Prevents Telegram entity parse errors (HTTP 400).
+    """
+    tag_pattern = r'(</?(?:b|code|i|u|s|pre|a)(?: [^>]*)?>)'
+    parts = re.split(tag_pattern, text)
+    cleaned = []
+    for p in parts:
+        if re.match(tag_pattern, p):
+            cleaned.append(p)
+        else:
+            esc = p.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            cleaned.append(esc)
+    return ''.join(cleaned)
+
 def send_telegram_message(chat_id, text):
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
     if not chat_id:
         return
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    safe_text = clean_telegram_html(text)
     payload = {
         "chat_id": chat_id,
-        "text": text,
+        "text": safe_text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code != 200:
-            payload.pop("parse_mode", None)
-            requests.post(url, json=payload, timeout=10)
+            print(f"Telegram API warning {r.status_code}: {r.text}")
     except Exception as e:
         print(f"Error sending Telegram message: {e}")
 
@@ -51,7 +70,7 @@ def format_radar_message():
     if btc['is_bull']:
         msg += "✅ <b>الضوء الأخضر مُفعّل:</b> السوق في مسار إيجابي يسمح باقتناص جميع الصفقات بنسب نجاح تصل إلى 88%."
     else:
-        msg += "🛡️ <b>البيتكوين تحت EMA50:</b> ينصح بالتركيز التام على إشارات <b>المستوى الماسي VIP (دقة >80%)</b> مع الالتزام الصارم بتأمين الوقف."
+        msg += "🛡️ <b>البيتكوين تحت EMA50:</b> ينصح بالتركيز التام على إشارات <b>المستوى الماسي VIP (دقة تفوق 80%)</b> مع الالتزام الصارم بتأمين الوقف."
     return msg
 
 def format_strategies_list():
@@ -96,7 +115,7 @@ def format_advisory_signal_message(sig, btc_status):
     vol = sig.get('volume_24h', 0)
     
     if vol >= 1_000_000:
-        vol_str = f"{vol / 1_000_000:.1f}M $"
+        vol_str = f"{vol / 1_000_000:.2f}M $"
     elif vol >= 1_000:
         vol_str = f"{vol / 1_000:.1f}K $"
     else:
@@ -105,53 +124,52 @@ def format_advisory_signal_message(sig, btc_status):
     # 1. Weekly Macro Signal
     if sig.get('timeframe') == '1W':
         msg = (
-            f"🏛️ <b>تنبيه استثماري أسبوعي ماكرو (Weekly Macro Signal):</b>\n"
-            f"────────────────────\n"
-            f"🪙 <b>العملة:</b> <code>{sym} / USDT</code> [فريم الأسبوع 1W]\n"
+            f"🏛️ <b>فرصة ماكرو استثمارية أسبوعية (Weekly Swing):</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🪙 <b>العملة:</b> <code>{sym} / USDT</code> (فريم الأسبوع 1W)\n"
             f"🏆 <b>الاستراتيجية:</b> <b>{sig['strategy_name']}</b>\n"
             f"📊 <b>الرتبة والدقة:</b> <b>{sig['tier_badge']}</b> (معامل ربحية {sig['profit_factor']})\n"
-            f"💰 <b>السعر الحالي:</b> <code>{cur_p} $</code>\n"
-            f"────────────────────\n"
+            f"💰 <b>سعر الدخول الحالي:</b> <code>{cur_p} $</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
             f"🎯 <b>خطة السوينغ الأسبوعي المعتمدة:</b>\n"
             f"• 🎯 <b>هدف الربح المقترح (+{sig['tp_pct']}%):</b> <code>{sig['tp_price']} $</code>\n"
             f"• 🛑 <b>وقف الخسارة الأولي (-{sig['sl_pct']}%):</b> <code>{sig['sl_price']} $</code>\n"
             f"• 🛡️ <b>سعر تأمين الوقف (+{sig['be_pct']}%):</b> <code>{sig['be_price']} $</code> (نقل الوقف للدخول)\n"
-            f"────────────────────\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
             f"💡 <i>هذه فرصة دورة صعود استثمارية كبرى على فريم الأسبوع (Macro Swing).</i>\n"
-            f"🔗 <a href='{sig['chart_url']}'>فتح الشارت على TradingView</a>"
+            f"🔗 <a href='{sig['chart_url']}'>اضغط هنا لفتح الشارت على TradingView</a>"
         )
         return msg
 
-    # 2. Daily Signal with 4H MTF Confirmation
-    mtf_icon = "✅" if sig.get('mtf_confirmed') else "⏳"
-    dual_filter_icon = "🏆 مكتمل بنجاح (VIP 85%-90.5%) 🟢" if sig.get('is_dual_filter') else "⚪ عادي"
+    # 2. Daily Signal with STRICT Dual Filter & 4H Timing Confirmation
     msg = (
-        f"{sig['tier_badge']}\n"
-        f"────────────────────\n"
-        f"🪙 <b>العملة:</b> <code>{sym} / USDT</code> [فريم اليومي 1D]\n"
-        f"💰 <b>السعر اللحظي:</b> <code>{cur_p} $</code>\n"
-        f"📊 <b>فوليوم 24 ساعة:</b> <code>{vol_str}</code>\n"
-        f"────────────────────\n"
-        f"🛡️ <b>الفلتر المزدوج الذهبي (Dual Filter):</b>\n"
-        f"• <b>حالة الفلتر:</b> <b>{dual_filter_icon}</b>\n"
-        f"• <b>مؤشر VWAP:</b> {sig.get('vwap_desc', '')}\n"
-        f"• <b>مؤشر الدعم:</b> {sig.get('support_desc', '')}\n"
-        f"────────────────────\n"
-        f"⚡ <b>تأكيد فريم الـ 4 ساعات اللحظي (MTF Timing):</b>\n"
-        f"• <b>حالة الدخول:</b> {mtf_icon} <b>{sig.get('mtf_badge', '')}</b>\n"
-        f"• <b>التفاصيل:</b> {sig.get('mtf_details', '')}\n"
-        f"────────────────────\n"
+        f"🏆 <b>{sig['tier_badge']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🪙 <b>العملة:</b> <code>{sym} / USDT</code>\n"
+        f"⏱️ <b>الفريم الزمني:</b> يومي 1D (مع فحص 4H لحظي)\n"
+        f"💰 <b>سعر الدخول اللحظي:</b> <code>{cur_p} $</code>\n"
+        f"📊 <b>سيولة 24 ساعة:</b> <code>{vol_str}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡️ <b>الفلتر المزدوج المؤسساتي (Dual Filter):</b>\n"
+        f"• <b>حالة الفلتر:</b> 🟢 <b>مؤكد ومكتمل بنجاح (VIP 80% - 90.5%)</b>\n"
+        f"• <b>مؤشر سيولة الحيتان (VWAP):</b> {sig.get('vwap_desc', '')}\n"
+        f"• <b>الارتكاز على الدعم (Support):</b> {sig.get('support_desc', '')}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ <b>توقيت الدخول على فريم 4 ساعات (4H Timing):</b>\n"
+        f"• <b>حالة التوقيت:</b> <b>{sig.get('mtf_badge', '')}</b>\n"
+        f"• <b>البيانات اللحظية:</b> {sig.get('mtf_details', '')}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 <b>خطة إدارة الصفقة المقترحة:</b>\n"
-        f"• 🎯 <b>هدف الربح (+{sig['tp_pct']}%):</b> <code>{sig['tp_price']} $</code>\n"
+        f"• 🎯 <b>هدف الربح المقترح (+{sig['tp_pct']}%):</b> <code>{sig['tp_price']} $</code>\n"
         f"• 🛑 <b>وقف الخسارة الأولي (-{sig['sl_pct']}%):</b> <code>{sig['sl_price']} $</code>\n"
-        f"• 🛡️ <b>تأمين الصفقة عند (+{sig['be_pct']}%):</b> <code>{sig['be_price']} $</code> (رفع الوقف للدخول)\n"
-        f"────────────────────\n"
-        f"💡 <b>إعداد الوقف المتحرك على باينانس (Trailing Stop):</b>\n"
-        f"• نوع الأمر: <b>Trailing Stop</b>\n"
-        f"• سعر التفعيل (Activation Price): <code>{sig['be_price']} $</code>\n"
-        f"• معدل التتبع (Trailing Delta): <code>1.5%</code>\n"
-        f"────────────────────\n"
-        f"🔗 <a href='{sig['chart_url']}'>فتح الشارت على TradingView</a>\n"
+        f"• 🛡️ <b>تأمين الصفقة برفع الوقف (+{sig['be_pct']}%):</b> <code>{sig['be_price']} $</code> (نقل الوقف للدخول فوراً)\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <b>إعداد أمر الوقف المتحرك (Trailing Stop):</b>\n"
+        f"• <b>نوع الأمر:</b> Trailing Stop على باينانس\n"
+        f"• <b>سعر التفعيل:</b> <code>{sig['be_price']} $</code>\n"
+        f"• <b>معدل التتبع (Delta):</b> <code>1.5%</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 <a href='{sig['chart_url']}'>اضغط هنا لفتح الشارت على TradingView</a>\n"
         f"⚠️ <i>إشعار استشاري: القرار النهائي للشراء والتنفيذ يدوياً على باينانس يعود لك.</i>"
     )
     return msg
@@ -160,34 +178,33 @@ def format_mtf_now_confirmed_message(sig):
     """Special high-priority alert when a coin was waiting for 4H and just got fully confirmed!"""
     sym = sig['symbol']
     cur_p = sig['current_price']
-    dual_filter_icon = "🏆 مكتمل بنجاح (VIP 85%-90.5%) 🟢" if sig.get('is_dual_filter') else "⚪ عادي"
     return (
         f"🟢⚡ <b>تأكيد دخول عاجل: صفقة تأكدت الآن على فريم 4 ساعات (الضوء الأخضر كامل - ادخل الآن)!</b>\n"
-        f"────────────────────\n"
-        f"🪙 <b>العملة:</b> <code>{sym} / USDT</code> [1D + 4H Confirmed ✅]\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🪙 <b>العملة:</b> <code>{sym} / USDT</code>\n"
         f"🏆 <b>الاستراتيجية:</b> <b>{sig['strategy_name']}</b> ({sig['tier_badge']})\n"
         f"💰 <b>سعر الدخول الحالي:</b> <code>{cur_p} $</code>\n"
-        f"────────────────────\n"
-        f"🛡️ <b>الفلتر المزدوج:</b> <b>{dual_filter_icon}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡️ <b>الفلتر المزدوج المؤسساتي:</b> 🟢 <b>مؤكد ومكتمل بنجاح (VIP)</b>\n"
         f"• <b>مؤشر VWAP:</b> {sig.get('vwap_desc', '')}\n"
         f"• <b>مؤشر الدعم:</b> {sig.get('support_desc', '')}\n"
-        f"────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"✅ <b>تحديث فريم الـ 4 ساعات:</b>\n"
         f"الصفقة دي كانت ظهرت على اليومي وبانتظار تأكيد 4H، <b>والآن شمعة الـ 4 ساعات أغلقت وتأكدت بالكامل!</b>\n"
         f"• <b>التفاصيل:</b> {sig.get('mtf_details', '')}\n"
-        f"────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 <b>خطة التنفيذ الفوري للصفقة:</b>\n"
         f"• 🎯 <b>هدف الربح (+{sig['tp_pct']}%):</b> <code>{sig['tp_price']} $</code>\n"
         f"• 🛑 <b>وقف الخسارة الأولي (-{sig['sl_pct']}%):</b> <code>{sig['sl_price']} $</code>\n"
         f"• 🛡️ <b>سعر تأمين الوقف (+{sig['be_pct']}%):</b> <code>{sig['be_price']} $</code> (نقل الوقف لسعر الدخول فوراً)\n"
-        f"────────────────────\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"💡 <b>إعداد الوقف المتحرك على باينانس (Trailing Stop):</b>\n"
-        f"• نوع الأمر: <b>Trailing Stop</b>\n"
-        f"• سعر التفعيل (Activation Price): <code>{sig['be_price']} $</code>\n"
-        f"• معدل التتبع (Trailing Delta): <code>1.5%</code>\n"
-        f"────────────────────\n"
+        f"• <b>نوع الأمر:</b> Trailing Stop\n"
+        f"• <b>سعر التفعيل:</b> <code>{sig['be_price']} $</code>\n"
+        f"• <b>معدل التتبع (Delta):</b> <code>1.5%</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"👉 <b>الآن الدخول آمن ومكتمل الشروط بالكامل!</b>\n"
-        f"🔗 <a href='{sig['chart_url']}'>فتح الشارت على TradingView</a>"
+        f"🔗 <a href='{sig['chart_url']}'>اضغط هنا لفتح الشارت على TradingView</a>"
     )
 
 def execute_scan_cycle(chat_id=None, is_scheduled_4h=False):
