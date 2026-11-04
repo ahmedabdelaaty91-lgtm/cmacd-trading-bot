@@ -46,6 +46,15 @@ def send_telegram_message(chat_id, text):
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code != 200:
             print(f"Telegram API warning {r.status_code}: {r.text}")
+            # If HTML parsing failed, strip HTML tags completely and send as plain text
+            # so the user NEVER sees raw <b> or <code> tags!
+            clean_plain = re.sub(r'<[^>]+>', '', text)
+            payload_plain = {
+                "chat_id": chat_id,
+                "text": clean_plain,
+                "disable_web_page_preview": True
+            }
+            requests.post(url, json=payload_plain, timeout=10)
     except Exception as e:
         print(f"Error sending Telegram message: {e}")
 
@@ -54,8 +63,16 @@ def format_radar_message():
     if 'error' in btc:
         return f"⚠️ <b>خطأ في الرادار:</b> {btc['error']}"
         
-    status_icon = "🟢 <b>مسار صاعد (BULLISH)</b>" if btc['is_bull'] else "🔴 <b>مسار تصحيحي / هابط (BEARISH)</b>"
+    status_icon = "🟢 <b>مسار صاعد فوق EMA50 (BULLISH)</b>" if btc['is_bull'] else "🔴 <b>مسار تصحيحي تحت EMA50 (BEARISH)</b>"
     banker_icon = "🟢 تدفق سيولة حيتان نشطة" if btc.get('banker_active') else "⚪ سيولة هادئة"
+    
+    active_mode_text = (
+        "🟢 <b>مود البيتكوين الصاعد + الدعم الأفقي (نشط الآن)</b>\n"
+        "الشرط المعتمد للعملات: ارتكاز على خط دعم أفقي مع صعود البيتكوين (نسب فوز حتى 94.1%)."
+        if btc['is_bull'] else
+        "🛡️ <b>مود درع الحيتان الدفاعي (نشط الآن)</b>\n"
+        "الشرط المعتمد للعملات: فلتر مزدوج إجباري (فوق VWAP + دعم أفقي) لحماية المحفظة أثناء تصحيح البيتكوين."
+    )
     
     msg = (
         f"📡 <b>رادار السوق والبيتكوين اللحظي:</b>\n"
@@ -66,36 +83,39 @@ def format_radar_message():
         f"• <b>حالة الاتجاه:</b> {status_icon}\n"
         f"• <b>تدفق سيولة المؤسسات:</b> {banker_icon} (مستوى {btc.get('banker_val')})\n"
         f"────────────────────\n"
+        f"⚙️ <b>نظام الفلترة المطبق حالياً:</b>\n"
+        f"{active_mode_text}"
     )
-    if btc['is_bull']:
-        msg += "✅ <b>الضوء الأخضر مُفعّل:</b> السوق في مسار إيجابي يسمح باقتناص جميع الصفقات بنسب نجاح تصل إلى 88%."
-    else:
-        msg += "🛡️ <b>البيتكوين تحت EMA50:</b> ينصح بالتركيز التام على إشارات <b>المستوى الماسي VIP (دقة تفوق 80%)</b> مع الالتزام الصارم بتأمين الوقف."
     return msg
 
 def format_strategies_list():
     msg = (
-        f"📋 <b>قائمة استراتيجيات البوت المعتمدة (جميعها بالفلتر المزدوج VWAP + دعم):</b>\n"
+        f"📋 <b>قائمة استراتيجيات البوت المعتمدة ونظام الفلترة التكيفي:</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🛡️ <i>شرط الفلتر المزدوج المؤسساتي مفعّل إجبارياً على كافة الصفقات بنسبة نجاح تفوق 80%:</i>\n\n"
-        f"👑 <b>1. المستوى الملكي (دقة 85% - 90.5% مع الفلتر المزدوج):</b>\n"
-        f"• 💣 <b>انفجار البولنجر مع الفلتر المزدوج</b> (90.5% | PF 9.21) 🏆\n"
-        f"• 🎯 <b>تقاطع EMA 20/100 مع الفلتر المزدوج</b> (88.0% | PF 4.50)\n"
-        f"• ☁️ <b>اختراق سحابة إيشيموكو مع الفلتر المزدوج</b> (87.0% | PF 4.88)\n"
-        f"• 📊 <b>تقاطع MACD تحت الصفر مع الفلتر المزدوج</b> (85.0% | PF 5.59)\n"
-        f"• 🌟 <b>التقاطع الذهبي الكلاسيكي EMA 50/200 مع الفلتر المزدوج</b> (85.0% | PF 4.10)\n\n"
-        f"💎 <b>2. المستوى الماسي (دقة 80.3% - 84.9% مع الفلتر المزدوج):</b>\n"
-        f"• 👑 <b>تقاطع EMA 9/21 مع الفلتر المزدوج</b> (83.5% | PF 4.32)\n"
-        f"• 🎯 <b>تقاطع EMA 50/100 مع الفلتر المزدوج</b> (83.0% | PF 3.50)\n"
-        f"• 🔥 <b>تقاطع EMA 20/50 مع الفلتر المزدوج</b> (81.5% | PF 3.10)\n"
-        f"• 🏆 <b>تقاطع خط RSI صعوداً مع الفلتر المزدوج</b> (80.3% | PF 2.93)\n\n"
-        f"🏛️ <b>3. استراتيجيات الماكرو الأسبوعية (1W Swings):</b>\n"
+        f"⚙️ <b>كيف يعمل نظام الفلترة التكيفي الذكي؟</b>\n"
+        f"• 🟢 <b>المود الأول (صعود البيتكوين فوق EMA50):</b>\n"
+        f"  يعمل بفلتر <b>البيتكوين الصاعد + الارتكاز على الدعم الأفقي</b> لاقتناص كل فرص الانتعاش بنسب نجاح تصل إلى <b>94.1% - 100%</b>.\n"
+        f"• 🛡️ <b>المود الثاني (تصحيح البيتكوين تحت EMA50):</b>\n"
+        f"  يتحول تلقائياً إلى <b>درع الحيتان الدفاعي (VWAP + الدعم الأفقي معاً)</b> لتصفية الكسر الكاذب بنسب نجاح تفوق <b>85% - 90.5%</b>.\n"
+        f"• 🌟 <b>المود الخارق (تأكيد ثلاثي):</b>\n"
+        f"  يحدث عند تحقق (البيتكوين صاعد + السعر فوق VWAP + دعم أفقي) وهي أعلى الصفقات أماناً بالسوق!\n\n"
+        f"👑 <b>أقوى استراتيجيات اليومي (1D Signals):</b>\n"
+        f"• 💣 <b>انفجار البولنجر مع الدعم</b> (90.5% - 94.1% | PF 16.17) 🏆\n"
+        f"• 🎯 <b>تقاطع EMA 20/100 مع الدعم</b> (88.0% - 100% | PF 24.9)\n"
+        f"• 👑 <b>تقاطع EMA 9/21 الخاطف</b> (83.5% - 90.1% | PF 9.01)\n"
+        f"• ☁️ <b>اختراق سحابة إيشيموكو</b> (84.8% - 87.0% | PF 4.88)\n"
+        f"• 📊 <b>تقاطع MACD تحت الصفر</b> (81.2% - 85.0% | PF 5.59)\n"
+        f"• 🎯 <b>تقاطع EMA 50/100</b> (83.0% - 100% | PF 9.30)\n"
+        f"• 🌟 <b>التقاطع الذهبي EMA 50/200</b> (79.2% - 85.0% | PF 4.10)\n"
+        f"• 🏆 <b>تقاطع خط RSI صعوداً</b> (78.0% - 80.3% | PF 2.93)\n"
+        f"• 🔥 <b>تقاطع EMA 20/50</b> (77.8% - 81.5% | PF 3.10)\n\n"
+        f"🏛️ <b>استراتيجيات الماكرو الأسبوعية (1W Swings):</b>\n"
         f"• 👑 <b>تقاطع MACD أسبوعي تحت الصفر</b> (87.5% | PF 6.54)\n"
         f"• 🌟 <b>التقاطع الذهبي الأسبوعي EMA 50/200</b> (85.0% | PF 4.00)\n"
         f"• ☁️ <b>اختراق سحابة إيشيموكو أسبوعي</b> (83.3% | PF 6.04)\n"
         f"• 💣 <b>انفجار البولنجر أسبوعي بعد انضغاط</b> (80.0% | PF 3.93)\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ <i>نظام التتبع الذكي يفحص كل 4 ساعات ويرسل تنبيهاً خاصاً فور اكتمال تأكيد الـ 4H دون تكرار أي صفقة سابقة!</i>"
+        f"⚡ <i>نظام الفحص يفحص دورياً كل 4 ساعات ويرسل تنبيهاً خاصاً فور اكتمال تأكيد شمعة الـ 4H دون تكرار أي صفقة سابقة!</i>"
     )
     return msg
 
@@ -131,7 +151,45 @@ def format_advisory_signal_message(sig, btc_status):
         )
         return msg
 
-    # 2. Daily Signal with STRICT Dual Filter & 4H Timing Confirmation
+    # 2. Daily Signal with Adaptive Hybrid Filter & 4H Timing
+    filter_mode_tag = sig.get('filter_mode_tag', '')
+    filter_title = sig.get('filter_mode_title', '🛡️ نظام الفلترة')
+    filter_desc = sig.get('filter_mode_desc', '')
+
+    if filter_mode_tag == 'SUPER_CONFIRMED':
+        filter_section = (
+            f"<b>{filter_title}:</b>\n"
+            f"• <b>نوع الاعتماد:</b> 🏆 <b>تأكيد ثلاثي خارق (أعلى أمان بالسوق)</b>\n"
+            f"• <b>حالة البيتكوين:</b> صاعد فوق EMA50 (السوق منتعش 🟢)\n"
+            f"• <b>سيولة الحيتان (VWAP):</b> {sig.get('vwap_desc', '')}\n"
+            f"• <b>منطقة الدعم:</b> {sig.get('support_desc', '')}\n"
+            f"• <b>سبب القبول:</b> {filter_desc}"
+        )
+    elif filter_mode_tag == 'BTC_BULL_SUPPORT':
+        filter_section = (
+            f"<b>{filter_title}:</b>\n"
+            f"• <b>نوع الاعتماد:</b> 🟢 <b>فلتر البيتكوين الصاعد + الدعم الأفقي</b>\n"
+            f"• <b>حالة البيتكوين:</b> صاعد فوق EMA50 (أعطى الضوء الأخضر للعملات)\n"
+            f"• <b>منطقة الدعم:</b> {sig.get('support_desc', '')}\n"
+            f"• <b>مؤشر VWAP:</b> {sig.get('vwap_desc', '')}\n"
+            f"• <b>سبب القبول:</b> {filter_desc}"
+        )
+    elif filter_mode_tag == 'VWAP_SUPPORT_DEFENSE':
+        filter_section = (
+            f"<b>{filter_title}:</b>\n"
+            f"• <b>نوع الاعتماد:</b> 🛡️ <b>درع الحيتان الدفاعي (VWAP + دعم أفقي)</b>\n"
+            f"• <b>حالة البيتكوين:</b> تصحيح تحت EMA50 (تفعيل درع الأمان للحماية)\n"
+            f"• <b>سيولة الحيتان (VWAP):</b> {sig.get('vwap_desc', '')}\n"
+            f"• <b>منطقة الدعم:</b> {sig.get('support_desc', '')}\n"
+            f"• <b>سبب القبول:</b> {filter_desc}"
+        )
+    else:
+        filter_section = (
+            f"🛡️ <b>نظام الفلترة المعتمد:</b>\n"
+            f"• <b>منطقة الدعم:</b> {sig.get('support_desc', '')}\n"
+            f"• <b>مؤشر VWAP:</b> {sig.get('vwap_desc', '')}"
+        )
+
     msg = (
         f"🏆 <b>{sig['tier_badge']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -140,10 +198,7 @@ def format_advisory_signal_message(sig, btc_status):
         f"💰 <b>سعر الدخول اللحظي:</b> <code>{cur_p} $</code>\n"
         f"📊 <b>سيولة 24 ساعة:</b> <code>{vol_str}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🛡️ <b>الفلتر المزدوج المؤسساتي (Dual Filter):</b>\n"
-        f"• <b>حالة الفلتر:</b> 🟢 <b>مؤكد ومكتمل بنجاح (VIP 80% - 90.5%)</b>\n"
-        f"• <b>مؤشر سيولة الحيتان (VWAP):</b> {sig.get('vwap_desc', '')}\n"
-        f"• <b>الارتكاز على الدعم (Support):</b> {sig.get('support_desc', '')}\n"
+        f"{filter_section}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>توقيت الدخول على فريم 4 ساعات (4H Timing):</b>\n"
         f"• <b>حالة التوقيت:</b> <b>{sig.get('mtf_badge', '')}</b>\n"
@@ -168,6 +223,7 @@ def format_mtf_now_confirmed_message(sig):
     """Special high-priority alert when a coin was waiting for 4H and just got fully confirmed!"""
     sym = sig['symbol']
     cur_p = sig['current_price']
+    filter_title = sig.get('filter_mode_title', 'الفلتر المعتمد')
     return (
         f"🟢⚡ <b>تأكيد دخول عاجل: صفقة تأكدت الآن على فريم 4 ساعات (الضوء الأخضر كامل - ادخل الآن)!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -175,9 +231,9 @@ def format_mtf_now_confirmed_message(sig):
         f"🏆 <b>الاستراتيجية:</b> <b>{sig['strategy_name']}</b> ({sig['tier_badge']})\n"
         f"💰 <b>سعر الدخول الحالي:</b> <code>{cur_p} $</code>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🛡️ <b>الفلتر المزدوج المؤسساتي:</b> 🟢 <b>مؤكد ومكتمل بنجاح (VIP)</b>\n"
-        f"• <b>مؤشر VWAP:</b> {sig.get('vwap_desc', '')}\n"
-        f"• <b>مؤشر الدعم:</b> {sig.get('support_desc', '')}\n"
+        f"🛡️ <b>{filter_title}:</b> 🟢 <b>مؤكد ومكتمل بنجاح</b>\n"
+        f"• <b>الدعم:</b> {sig.get('support_desc', '')}\n"
+        f"• <b>VWAP:</b> {sig.get('vwap_desc', '')}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"✅ <b>تحديث فريم الـ 4 ساعات:</b>\n"
         f"الصفقة دي كانت ظهرت على اليومي وبانتظار تأكيد 4H، <b>والآن شمعة الـ 4 ساعات أغلقت وتأكدت بالكامل!</b>\n"
@@ -290,14 +346,17 @@ def execute_scan_cycle(chat_id=None, is_scheduled_4h=False):
         return
         
     mtf_confirmed_count = len([s for s in signals_1d if s.get('mtf_confirmed')])
-    dual_filter_count = len([s for s in signals_1d if s.get('is_dual_filter')])
+    super_count = len([s for s in signals_1d if s.get('filter_mode_tag') == 'SUPER_CONFIRMED'])
+    mode_desc_str = "🟢 مود البيتكوين الصاعد + الدعم" if btc.get('is_bull') else "🛡️ مود الحيتان الدفاعي (VWAP + دعم)"
     header_msg = (
         f"🎯 <b>تقرير رصد الفرص الذهبية المؤكدة:</b>\n"
         f"────────────────────\n"
+        f"• <b>نظام الفلترة النشط:</b> {mode_desc_str}\n"
+        f"• <b>البيتكوين:</b> <code>{btc.get('price', 0):,.1f} $</code> ({'فوق EMA50 🟢' if btc.get('is_bull') else 'تحت EMA50 🔴'})\n"
         f"• <b>العملات المفحوصة:</b> {scanned_count} عملة.\n"
         f"• <b>إشارات فريم اليومي (1D):</b> {len(signals_1d)} فرصة.\n"
-        f"• 👑 <b>فرص مكتملة الفلتر المزدوج (VWAP + دعم 85%-90.5%):</b> {dual_filter_count} فرصة.\n"
-        f"• ⚡ <b>إشارات مؤكدة بالكامل على فريم 4H (جاهزة للدخول):</b> {mtf_confirmed_count} عملة.\n"
+        f"• 🌟 <b>فرص التأكيد الثلاثي الخارق:</b> {super_count} فرصة.\n"
+        f"• ⚡ <b>إشارات مؤكدة بالكامل 4H (جاهزة للدخول):</b> {mtf_confirmed_count} عملة.\n"
         f"• 🏛️ <b>إشارات الماكرو الأسبوعية (1W):</b> {len(signals_1w)} فرصة استثمارية.\n"
         f"────────────────────\n"
         f"👇 <i>تفاصيل كل فرصة موضحة في الرسائل التالية:</i>"
