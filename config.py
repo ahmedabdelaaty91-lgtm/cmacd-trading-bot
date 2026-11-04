@@ -58,3 +58,15 @@ def get_watchlist():
 
 WATCHLIST = get_watchlist()
 
+ALPHA_SYMBOLS_FILE = os.path.join(os.path.dirname(__file__), "alpha_symbols.json")
+def get_alpha_symbols():
+    if os.path.exists(ALPHA_SYMBOLS_FILE):
+        try:
+            with open(ALPHA_SYMBOLS_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+ALPHA_SYMBOLS = get_alpha_symbols()
+

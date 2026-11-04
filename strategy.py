@@ -3,7 +3,70 @@ import pandas as pd
 import requests
 import json
 import concurrent.futures
-from config import BINANCE_DATA_URL, BINANCE_REST_URL, WATCHLIST, BTC_EMA_PERIOD, get_watchlist
+from config import BINANCE_DATA_URL, BINANCE_REST_URL, WATCHLIST, BTC_EMA_PERIOD, get_watchlist, get_alpha_symbols
+
+def calc_range_filter_signal(close_s, period=20, mult=3.5):
+    close_arr = close_s.values
+    n = len(close_arr)
+    diff = np.abs(np.diff(close_arr, prepend=close_arr[0]))
+    s_diff = pd.Series(diff)
+    avrng = s_diff.ewm(span=period, adjust=False).mean()
+    wper = (period * 2) - 1
+    r = (avrng.ewm(span=wper, adjust=False).mean() * mult).values
+    
+    filt = np.zeros(n)
+    filt[0] = close_arr[0]
+    for i in range(1, n):
+        x = close_arr[i]
+        r_val = r[i]
+        prev = filt[i-1]
+        if x - r_val > prev:
+            filt[i] = x - r_val
+        elif x + r_val < prev:
+            filt[i] = x + r_val
+        else:
+            filt[i] = prev
+            
+    fdir = np.zeros(n, dtype=int)
+    upward = np.zeros(n, dtype=int)
+    downward = np.zeros(n, dtype=int)
+    cond_ini = np.zeros(n, dtype=int)
+    buy_signals = np.zeros(n, dtype=bool)
+    
+    for i in range(1, n):
+        prev_fdir = fdir[i-1] if i > 0 else 0
+        if close_arr[i] > filt[i]:
+            fdir[i] = 1
+        elif close_arr[i] < filt[i]:
+            fdir[i] = -1
+        else:
+            fdir[i] = prev_fdir
+            
+        if fdir[i] == 1:
+            upward[i] = upward[i-1] + 1
+            downward[i] = 0
+        elif fdir[i] == -1:
+            downward[i] = downward[i-1] + 1
+            upward[i] = 0
+        else:
+            upward[i] = 0
+            downward[i] = 0
+            
+        long_cond = (close_arr[i] > filt[i]) and (close_arr[i] > close_arr[i-1]) and (upward[i] > 0)
+        short_cond = (close_arr[i] < filt[i]) and (close_arr[i] < close_arr[i-1]) and (downward[i] > 0)
+        
+        prev_ini = cond_ini[i-1]
+        if long_cond:
+            cond_ini[i] = 1
+        elif short_cond:
+            cond_ini[i] = -1
+        else:
+            cond_ini[i] = prev_ini
+            
+        if long_cond and prev_ini == -1:
+            buy_signals[i] = True
+            
+    return bool(buy_signals[-1] or buy_signals[-2])
 
 def calc_rma(series, length):
     alpha = 1.0 / length
@@ -287,12 +350,34 @@ def analyze_coin_1d(item):
     if not passed_filter:
         return None
 
+    # Check if coin belongs to Binance Alpha / Seed Tag
+    alpha_set = get_alpha_symbols()
+    base_asset = pair.replace("USDT", "")
+    is_alpha = bool((name in alpha_set) or (base_asset in alpha_set))
+
+    # VuManChu Swing Signal (Range Filter 20 / 3.5)
+    vumanchu_buy = calc_range_filter_signal(c, period=20, mult=3.5)
+
     # -------------------------------------------------------------
     # Match Against Ranked Golden Strategies
     # -------------------------------------------------------------
     matched_strat = None
 
-    if btc_is_bull:
+    if is_alpha:
+        # Validated Strategy Calibration Specifically for High-Beta Binance Alpha Coins:
+        if bb_breakout:
+            matched_strat = ("انفجار البولنجر (عملات ألفا مضاربية)", "👑 82.4% | انفجار البولنجر (ألفا)", 82.4, 6.22, 0.045, 0.035, 0.020, 0)
+        elif cross_20_100:
+            matched_strat = ("تقاطع EMA 20/100 (عملات ألفا)", "👑 100% | تقاطع EMA 20/100 (ألفا)", 100.0, 24.9, 0.045, 0.035, 0.020, 0)
+        elif vumanchu_buy:
+            matched_strat = ("مؤشر VuManChu Swing المعتمد (عملات ألفا)", "🥇 76.8% | VuManChu Swing (ألفا)", 76.8, 4.41, 0.045, 0.035, 0.020, 1)
+        elif cross_9_21:
+            matched_strat = ("تقاطع EMA 9/21 الخاطف (عملات ألفا)", "💎 68.6% | تقاطع EMA 9/21 (ألفا)", 68.6, 2.91, 0.045, 0.035, 0.020, 2)
+        elif macd_below_zero:
+            matched_strat = ("تقاطع MACD تحت الصفر (عملات ألفا)", "💎 65.4% | MACD ارتداد قاع (ألفا)", 65.4, 2.52, 0.060, 0.045, 0.025, 2)
+        elif kumo_breakout:
+            matched_strat = ("اختراق سحابة إيشيموكو (عملات ألفا)", "💎 75.0% | سحابة إيشيموكو (ألفا)", 75.0, 3.20, 0.060, 0.045, 0.025, 2)
+    elif btc_is_bull:
         # Validated Win Rates for BTC Bull + Support Mode:
         if bb_breakout:
             matched_strat = ("انفجار البولنجر (مود البيتكوين + الدعم)", "👑 94.1% | انفجار البولنجر (BTC + دعم)", 94.1, 16.17, 0.045, 0.035, 0.020, 0)
@@ -312,6 +397,8 @@ def analyze_coin_1d(item):
             matched_strat = ("تقاطع EMA 20/50 (مود البيتكوين + الدعم)", "🥇 77.8% | تقاطع EMA 20/50 (BTC + دعم)", 77.8, 2.85, 0.045, 0.035, 0.020, 2)
         elif cross_50_200:
             matched_strat = ("التقاطع الذهبي الكلاسيكي (مود البيتكوين + الدعم)", "🌟 79.2% | التقاطع الذهبي (BTC + دعم)", 79.2, 3.09, 0.045, 0.035, 0.020, 2)
+        elif vumanchu_buy:
+            matched_strat = ("مؤشر VuManChu Swing المعتمد (20/3.5)", "🥇 67.7% | VuManChu Swing (BTC + دعم)", 67.7, 3.81, 0.045, 0.035, 0.020, 2)
     else:
         # Validated Win Rates for Defensive VWAP + Support Mode:
         if bb_breakout:
@@ -332,6 +419,8 @@ def analyze_coin_1d(item):
             matched_strat = ("تقاطع EMA 20/50 مع فلتر الحيتان (VWAP + دعم)", "💎 81.5% | EMA 20/50 + فلتر الحيتان", 81.5, 3.10, 0.060, 0.045, 0.025, 1)
         elif rsi_cross:
             matched_strat = ("تقاطع خط RSI مع فلتر الحيتان (VWAP + دعم)", "💎 80.3% | RSI ارتداد + فلتر الحيتان", 80.3, 2.93, 0.060, 0.045, 0.025, 1)
+        elif vumanchu_buy:
+            matched_strat = ("مؤشر VuManChu Swing المعتمد (20/3.5)", "🥇 67.7% | VuManChu Swing + فلتر الحيتان", 67.7, 3.81, 0.045, 0.035, 0.020, 2)
 
     if not matched_strat:
         return None
@@ -351,6 +440,7 @@ def analyze_coin_1d(item):
         'timeframe': '1D',
         'symbol': name,
         'pair': pair,
+        'is_alpha': is_alpha,
         'current_price': cur_p,
         'volume_24h': vol_24h,
         'strategy_name': strat_name,
