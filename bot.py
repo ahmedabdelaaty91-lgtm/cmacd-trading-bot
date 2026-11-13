@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 import config
 from strategy import (
     check_btc_regime,
-    scan_ichimoku_trio,
-    format_ichimoku_trio_report
+    scan_authorized_strategies,
+    format_authorized_report,
 )
 from binance_client import BinanceClient
 
@@ -86,39 +86,45 @@ def format_radar_message():
     status_icon = "🟢 <b>مسار صاعد فوق EMA50 (BULLISH)</b>" if btc.get('is_bull') else "🔴 <b>مسار تصحيحي تحت EMA50 (BEARISH)</b>"
     
     msg = (
-        f"📡 <b>رادار اتجاه البيتكوين (Daily 1D):</b>\n"
+        f"📡 <b>رادار اتجاه البيتكوين العام (Daily 1D):</b>\n"
         f"────────────────────\n"
         f"• <b>سعر البيتكوين:</b> <code>{btc.get('price', 0):,.1f} $</code>\n"
         f"• <b>Daily EMA50:</b> <code>{btc.get('ema50', 0):,.1f} $</code>\n"
         f"• <b>الفارق عن المتوسط:</b> <code>{btc.get('diff_pct', 0):+.2f}%</code>\n"
         f"• <b>حالة المسار العام:</b> {status_icon}\n"
         f"────────────────────\n"
-        f"💡 <i>عند ارتكاز البيتكوين فوق EMA50 تكون موجات الإيشيموكو الصاعدة أكثر قوة وانفجاراً!</i>"
+        f"💡 <i>عند ارتكاز البيتكوين فوق EMA50 ترتفع نسبة نجاح الصفقات السريعة إلى أكثر من 85% - 94%!</i>"
     )
     return msg
 
-def execute_ichimoku_trio_scan(chat_id, is_scheduled=False):
+def execute_scan(chat_id, is_scheduled=False, **kwargs):
     """
-    Executes the 3 Authorized Master Ichimoku Strategies across 301 coins:
-    1. The Supreme Combo (PF 6.65)
-    2. Cloud Breakout at Support
-    3. Cloud Pullback & Retest Bounce
+    Executes the authorized elite strategy scan across all Binance USDT coins:
+    1. EMA 9 / EMA 21 at Support (81% - 85% success)
+    2. MACD at Support (72% success)
+    3. Ichimoku TK at Support (70% success)
+    4. Stochastic (14, 3, 3) at Support (64% success)
+    5. Kumo Breakout (About to break or broke above cloud)
     """
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
 
-    if not is_scheduled:
+    is_scheduled_call = is_scheduled or kwargs.get('is_scheduled_4h', False) or kwargs.get('is_scheduled_daily', False)
+
+    if not is_scheduled_call:
         send_telegram_message(
             chat_id,
-            "⚡ <b>جاري فحص 301 عملة لاستراتيجيات الإيشيموكو الثلاثة المعتمدة...</b>\n\n"
-            "1. 🏆 <b>المعادلة الفائقة:</b> تقاطع Tenkan/Kijun صاعد فوق السحابة + قرب الكيجين &lt;= 4% (معامل ربح 6.65).\n"
-            "2. ☁️ <b>اختراق السحابة عند الدعم:</b> صعود فوق السحابة مستنداً على دعم قوي.\n"
-            "3. 🔄 <b>إعادة اختبار السحابة:</b> الارتداد الصاعد من سقف السحابة.\n\n"
+            "⚡ <b>جاري فحص السوق للنماذج المعتمدة ورادار اختراق السحابة...</b>\n\n"
+            "• 🥇 <b>تقاطع EMA 9/21 عند دعم:</b> نسبة نجاح 81% - 85%.\n"
+            "• 🥈 <b>تقاطع الماكد عند دعم:</b> نسبة نجاح 72%.\n"
+            "• 🥉 <b>تقاطع التنكن والكيجن عند دعم:</b> نسبة نجاح 70%.\n"
+            "• 🎖️ <b>تقاطع الاستوكاستك (14,3,3) عند دعم:</b> نسبة نجاح 64%.\n"
+            "• ☁️ <b>رادار اختراق السحابة:</b> رصد العملات التي تخترق أو على وشك الاختراق.\n\n"
             "⏱️ <i>لحظات وسيصلك التقرير المباشر...</i>"
         )
         
-    scan_res = scan_ichimoku_trio()
-    reports = format_ichimoku_trio_report(scan_res)
+    scan_res = scan_authorized_strategies()
+    reports = format_authorized_report(scan_res)
     
     if isinstance(reports, list):
         for rep in reports:
@@ -126,6 +132,10 @@ def execute_ichimoku_trio_scan(chat_id, is_scheduled=False):
             time.sleep(1)
     else:
         send_telegram_message(chat_id, reports)
+
+execute_scan_cycle = execute_scan
+execute_daily_scan = execute_scan
+execute_ichimoku_trio_scan = execute_scan
 
 def handle_telegram_updates():
     """Telegram Long-Polling listener with multi-command support"""
@@ -159,19 +169,18 @@ def handle_telegram_updates():
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
                         welcome = (
-                            f"👋 <b>أهلاً بك في رادار استراتيجيات الإيشيموكو الذهبية الثلاثة!</b>\n"
+                            f"👋 <b>أهلاً بك في بوت رادار الصفقات المعتمدة واختراق السحابة!</b>\n"
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n\n"
-                            f"🎯 <b>تم اعتماد الاستراتيجيات الثلاثة الفائقة فقط:</b>\n"
-                            f"• 🏆 <b>1. المعادلة الفائقة (The Supreme Combo - PF 6.65):</b>\n"
-                            f"   تقاطع Tenkan/Kijun صاعد فوق السحابة + قرب السعر من الكيجين سن &lt;= 4% + سحابة مستقبلية خضراء + RSI صحي.\n\n"
-                            f"• ☁️ <b>2. اختراق سحابة الإيشيموكو عند الدعم:</b>\n"
-                            f"   اختراق سقف السحابة صعوداً بالارتكاز على قاع أو دعم قوي.\n\n"
-                            f"• 🔄 <b>3. إعادة اختبار السحابة والارتداد (Kumo Retest):</b>\n"
-                            f"   رصد العملات التي صححت واختبرت سقف السحابة كدعم وبدأت بالصعود مجدداً.\n\n"
-                            f"📌 <b>الأوامر السريعة:</b>\n"
-                            f"• أرسل <b>سحابة</b> أو <code>/scan</code>: لتشغيل الفحص الفوري للثلاث استراتيجيات.\n"
-                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع اتجاه البيتكوين.\n"
+                            f"🎯 <b>الاستراتيجيات المعتمدة حالياً (هدف +3%):</b>\n"
+                            f"• 🥇 <b>1. تقاطع EMA 9 / EMA 21 عند دعم:</b> دقة 81% - 85% في أول يومين.\n"
+                            f"• 🥈 <b>2. تقاطع الماكد عند دعم:</b> دقة 72% في أول يومين.\n"
+                            f"• 🥉 <b>3. تقاطع التنكن والكيجن عند دعم:</b> دقة 70% في أول يومين.\n"
+                            f"• 🎖️ <b>4. تقاطع الاستوكاستك (14,3,3) عند دعم:</b> دقة 64% في أول يومين.\n"
+                            f"• ☁️ <b>5. رادار اختراق السحابة:</b> رصد العملات التي تخترق أو تقترب من اختراق سقف السحابة.\n\n"
+                            f"📌 <b>الأوامر المباشرة:</b>\n"
+                            f"• أرسل <b>فحص</b> أو <b>سحابة</b> أو <code>/scan</code>: لتشغيل الفحص اللحظي الآن.\n"
+                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين العام.\n"
                             f"• أرسل <code>/ping</code>: لاختبار الاتصال المباشر بباينانس."
                         )
                         send_telegram_message(chat_id, welcome)
@@ -183,13 +192,13 @@ def handle_telegram_updates():
                         res = client.check_connection()
                         send_telegram_message(chat_id, res['message'])
                         
-                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "سحابة", "السحابة", "ايشيموكو", "الايشيموكو", "ذهبي", "الذهبي", "/golden", "golden", "/ichimoku", "ichimoku", "/kumo", "kumo"]:
-                        threading.Thread(target=execute_ichimoku_trio_scan, args=(chat_id, False), daemon=True).start()
+                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "سحابة", "السحابة", "فرص", "الفرص", "صفقات", "/kumo", "kumo"]:
+                        threading.Thread(target=execute_scan, args=(chat_id, False), daemon=True).start()
                         
                     else:
                         reply = (
                             "❓ <b>الأوامر المتاحة:</b>\n"
-                            "• أرسل <b>سحابة</b> أو <code>/scan</code>: لفحص الاستراتيجيات الثلاثة للإيشيموكو (المعادلة الفائقة + الاختراق عند الدعم + إعادة اختبار السحابة).\n"
+                            "• أرسل <b>فحص</b> أو <b>سحابة</b> أو <code>/scan</code>: لفحص العملات للنماذج المعتمدة ورادار اختراق السحابة.\n"
                             "• أرسل <b>رادار</b> أو <code>/radar</code>: لحالة البيتكوين العامة."
                         )
                         send_telegram_message(chat_id, reply)
@@ -198,11 +207,10 @@ def handle_telegram_updates():
 
 def four_hour_scheduler_loop():
     """
-    Automatically triggers execute_ichimoku_trio_scan every 4 hours:
+    Automatically triggers execute_scan every 4 hours:
     At 00:02, 04:02, 08:02, 12:02, 16:02, 20:02 UTC.
-    Sends the single consolidated Ichimoku Trio digest!
     """
-    print("4-Hour Automatic Ichimoku Trio Scanner Thread Started.")
+    print("4-Hour Automatic Scanner Thread Started.")
     last_slot = None
     
     while True:
@@ -211,8 +219,8 @@ def four_hour_scheduler_loop():
             if now_utc.hour % 4 == 0 and now_utc.minute >= 2:
                 slot_id = f"{now_utc.strftime('%Y-%m-%d')}_{now_utc.hour}"
                 if last_slot != slot_id:
-                    print(f"Triggering Scheduled 4-Hour Ichimoku Scan for slot {slot_id}...")
-                    execute_ichimoku_trio_scan(config.TELEGRAM_CHAT_ID, is_scheduled=True)
+                    print(f"Triggering Scheduled 4-Hour Scan for slot {slot_id}...")
+                    execute_scan(config.TELEGRAM_CHAT_ID, is_scheduled=True)
                     last_slot = slot_id
         except Exception as e:
             print(f"Error in 4-hour scheduler loop: {e}")
@@ -231,11 +239,13 @@ def start_health_server():
             self.end_headers()
             data = {
                 "status": "online",
-                "service": "Ichimoku Master Trio Radar Bot",
+                "service": "Elite Crypto Trading & Cloud Breakout Radar Bot",
                 "strategies": [
-                    "1. The Supreme Combo (Strong TK Cross Above Cloud + Kijun <= 4% - PF 6.65)",
-                    "2. Kumo Breakout at Support",
-                    "3. Kumo Retest & Bounce"
+                    "1. EMA 9 / EMA 21 at Support (81% Success)",
+                    "2. MACD Bullish Cross at Support (72% Success)",
+                    "3. Ichimoku TK Cross at Support (70% Success)",
+                    "4. Stochastic (14,3,3) at Support (64% Success)",
+                    "5. Kumo Cloud Breakout Radar"
                 ],
                 "time_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -254,7 +264,7 @@ def start_health_server():
 if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding='utf-8')
-    print("Ichimoku Master Trio Radar Bot starting...")
+    print("Elite Crypto Trading Radar Bot starting...")
     
     # Start Health Server
     health_thread = threading.Thread(target=start_health_server, daemon=True)
