@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cmacd-trading-bot
+    name: tmo-hull-trading-bot
     env: python
     region: frankfurt
     plan: free

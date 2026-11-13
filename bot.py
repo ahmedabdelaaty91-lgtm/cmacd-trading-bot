@@ -3,6 +3,7 @@ import json
 import requests
 import threading
 import re
+import os
 from datetime import datetime, timezone
 import config
 from strategy import (
@@ -30,6 +31,7 @@ def clean_telegram_html(text):
             esc = p.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             cleaned.append(esc)
     return ''.join(cleaned)
+
 
 def send_telegram_message(chat_id, text):
     if not chat_id:
@@ -81,46 +83,48 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         print(f"Error sending Telegram message: {e}")
 
+
 def format_radar_message():
     btc = check_btc_regime()
-    status_icon = "🟢 <b>مسار صاعد فوق EMA50 (BULLISH)</b>" if btc.get('is_bull') else "🔴 <b>مسار تصحيحي تحت EMA50 (BEARISH)</b>"
+    is_bull = btc.get('is_bull', False)
+    status_icon = "🟢 <b>مسار صاعد فوق Daily EMA50 (BULLISH)</b>" if is_bull else "🔴 <b>مسار تصحيحي أسفل Daily EMA50 (BEARISH)</b>"
+    diff_sign = "+" if btc.get('diff_pct', 0) >= 0 else ""
     
     msg = (
-        f"📡 <b>رادار اتجاه البيتكوين العام (Daily 1D):</b>\n"
+        f"📡 <b>رادار اتجاه البيتكوين العام (BTC Daily 1D):</b>\n"
         f"────────────────────\n"
         f"• <b>سعر البيتكوين:</b> <code>{btc.get('price', 0):,.1f} $</code>\n"
-        f"• <b>Daily EMA50:</b> <code>{btc.get('ema50', 0):,.1f} $</code>\n"
-        f"• <b>الفارق عن المتوسط:</b> <code>{btc.get('diff_pct', 0):+.2f}%</code>\n"
-        f"• <b>حالة المسار العام:</b> {status_icon}\n"
+        f"• <b>متوسط Daily EMA50:</b> <code>{btc.get('ema50', 0):,.1f} $</code>\n"
+        f"• <b>الفارق عن المتوسط:</b> <code>{diff_sign}{btc.get('diff_pct', 0):.2f}%</code>\n"
+        f"• <b>حالة السوق:</b> {status_icon}\n"
         f"────────────────────\n"
-        f"💡 <i>عند ارتكاز البيتكوين فوق EMA50 ترتفع نسبة نجاح الصفقات السريعة إلى أكثر من 85% - 94%!</i>"
+        f"💡 <b>قواعد إدارة المخاطر المبنية على الباكتيست:</b>\n"
+        f"• <b>عندما يكون البيتكوين صاعداً (BTC &gt; EMA50):</b>\n"
+        f"  ترتفع دقة النموذج الأقوى إلى <b>73.8%</b> في أول يومين (إجمالي نجاح 91.1% ومعامل ربح PF 1.34).\n"
+        f"• <b>عندما يكون البيتكوين هابطاً (BTC &lt; EMA50):</b>\n"
+        f"  تداول بحذر شديد مع جني ربح سريع عند <b>+3.0%</b> فور تحققه."
     )
     return msg
 
-def execute_scan(chat_id, is_scheduled=False, **kwargs):
+
+def execute_scan(chat_id=None, is_scheduled=False, **kwargs):
     """
-    Executes the authorized elite strategy scan across all Binance USDT coins:
-    1. EMA 9 / EMA 21 at Support (81% - 85% success)
-    2. MACD at Support (72% success)
-    3. Ichimoku TK at Support (70% success)
-    4. Stochastic (14, 3, 3) at Support (64% success)
-    5. Kumo Breakout (About to break or broke above cloud)
+    Executes scan across all Binance USDT coins exclusively for the 2 authorized models:
+    1. النموذج الأساسي (تقاطع TMO + خط Hull Suite أخضر + عند الدعم)
+    2. النموذج الأقوى 🔥 (عند دعم + خط Hull أخضر + شمعة خضراء + فوليوم ≥ 1.15x)
     """
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
 
     is_scheduled_call = is_scheduled or kwargs.get('is_scheduled_4h', False) or kwargs.get('is_scheduled_daily', False)
 
-    if not is_scheduled_call:
+    if not is_scheduled_call and chat_id:
         send_telegram_message(
             chat_id,
-            "⚡ <b>جاري فحص السوق للنماذج المعتمدة ورادار اختراق السحابة...</b>\n\n"
-            "• 🥇 <b>تقاطع EMA 9/21 عند دعم:</b> نسبة نجاح 81% - 85%.\n"
-            "• 🥈 <b>تقاطع الماكد عند دعم:</b> نسبة نجاح 72%.\n"
-            "• 🥉 <b>تقاطع التنكن والكيجن عند دعم:</b> نسبة نجاح 70%.\n"
-            "• 🎖️ <b>تقاطع الاستوكاستك (14,3,3) عند دعم:</b> نسبة نجاح 64%.\n"
-            "• ☁️ <b>رادار اختراق السحابة:</b> رصد العملات التي تخترق أو على وشك الاختراق.\n\n"
-            "⏱️ <i>لحظات وسيصلك التقرير المباشر...</i>"
+            "⚡ <b>جاري فحص السوق للنماذج المعتمدة (TMO + Hull Suite)...</b>\n\n"
+            "• 🌟 <b>النموذج الأقوى 🔥:</b> دعم + Hull أخضر + شمعة خضراء + فوليوم ≥ 1.15x (دقة 70.7%)\n"
+            "• ⚡ <b>النموذج الأساسي:</b> تقاطع TMO + خط Hull أخضر + عند الدعم (دقة 63.5%)\n\n"
+            "⏱️ <i>لحظات وسيصلك التقرير المباشر مع تقييم وضع البيتكوين...</i>"
         )
         
     scan_res = scan_authorized_strategies()
@@ -136,6 +140,7 @@ def execute_scan(chat_id, is_scheduled=False, **kwargs):
 execute_scan_cycle = execute_scan
 execute_daily_scan = execute_scan
 execute_ichimoku_trio_scan = execute_scan
+
 
 def handle_telegram_updates():
     """Telegram Long-Polling listener with multi-command support"""
@@ -169,67 +174,48 @@ def handle_telegram_updates():
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
                         welcome = (
-                            f"👋 <b>أهلاً بك في بوت رادار الصفقات المعتمدة واختراق السحابة!</b>\n"
+                            f"👋 <b>أهلاً بك في بوت رادار الصفقات المعتمدة (TMO + Hull Suite)!</b>\n"
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n\n"
-                            f"🎯 <b>الاستراتيجيات المعتمدة حالياً (هدف +3%):</b>\n"
-                            f"• 🥇 <b>1. تقاطع EMA 9 / EMA 21 عند دعم:</b> دقة 81% - 85% في أول يومين.\n"
-                            f"• 🥈 <b>2. تقاطع الماكد عند دعم:</b> دقة 72% في أول يومين.\n"
-                            f"• 🥉 <b>3. تقاطع التنكن والكيجن عند دعم:</b> دقة 70% في أول يومين.\n"
-                            f"• 🎖️ <b>4. تقاطع الاستوكاستك (14,3,3) عند دعم:</b> دقة 64% في أول يومين.\n"
-                            f"• ☁️ <b>5. رادار اختراق السحابة:</b> رصد العملات التي تخترق أو تقترب من اختراق سقف السحابة.\n\n"
-                            f"📌 <b>الأوامر المباشرة:</b>\n"
-                            f"• أرسل <b>فحص</b> أو <b>سحابة</b> أو <code>/scan</code>: لتشغيل الفحص اللحظي الآن.\n"
-                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين العام.\n"
-                            f"• أرسل <code>/ping</code>: لاختبار الاتصال المباشر بباينانس."
+                            f"🎯 <b>النماذج المعتمدة حصرياً (الهدف السريع +3.0%):</b>\n\n"
+                            f"1️⃣ 🌟 <b>النموذج الأقوى 🔥:</b>\n"
+                            f"• الشروط: ارتكاز عند دعم + خط Hull Suite أخضر + شمعة دافعة خضراء + سيولة فوليوم ≥ 1.15x.\n"
+                            f"• نسبة النجاح: <b>70.7%</b> في أول يومين (ترتفع لـ <b>73.8%</b> مع صعود BTC) | إجمالي تحقيق الهدف: <b>90.9%</b>.\n\n"
+                            f"2️⃣ ⚡ <b>النموذج الأساسي:</b>\n"
+                            f"• الشروط: تقاطع TMO إيجابي + خط Hull Suite أخضر + ارتكاز عند دعم.\n"
+                            f"• نسبة النجاح: <b>63.5%</b> في أول يومين (ترتفع لـ <b>65.5%</b> مع صعود BTC) | إجمالي تحقيق الهدف: <b>86.3%</b>.\n\n"
+                            f"────────────────────\n"
+                            f"📌 <b>الأوامر المتاحة:</b>\n"
+                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق فورياً وإرسال الصفقات المطابقة وتحديد نوع النموذج وحالة البيتكوين.\n"
+                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين بالنسبة لـ Daily EMA50.\n"
+                            f"• أرسل <code>/ping</code>: لاختبار الاتصال مع باينانس."
                         )
                         send_telegram_message(chat_id, welcome)
                         
-                    elif text_lower in ["رادار", "/radar", "radar"]:
+                    elif text_lower in ["رادار", "/radar", "radar", "بيتكوين", "btc"]:
                         send_telegram_message(chat_id, format_radar_message())
                         
                     elif text_lower in ["اتصال", "باينانس", "/ping", "ping"]:
                         res = client.check_connection()
                         send_telegram_message(chat_id, res['message'])
                         
-                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "سحابة", "السحابة", "فرص", "الفرص", "صفقات", "/kumo", "kumo"]:
+                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص", "صفقات", "tmo", "hull"]:
                         threading.Thread(target=execute_scan, args=(chat_id, False), daemon=True).start()
                         
                     else:
                         reply = (
                             "❓ <b>الأوامر المتاحة:</b>\n"
-                            "• أرسل <b>فحص</b> أو <b>سحابة</b> أو <code>/scan</code>: لفحص العملات للنماذج المعتمدة ورادار اختراق السحابة.\n"
-                            "• أرسل <b>رادار</b> أو <code>/radar</code>: لحالة البيتكوين العامة."
+                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق للنموذجين المعتمدين.\n"
+                            "• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة حالة البيتكوين العامة."
                         )
                         send_telegram_message(chat_id, reply)
         except Exception as e:
             time.sleep(3)
 
-def four_hour_scheduler_loop():
-    """
-    Automatically triggers execute_scan every 4 hours:
-    At 00:02, 04:02, 08:02, 12:02, 16:02, 20:02 UTC.
-    """
-    print("4-Hour Automatic Scanner Thread Started.")
-    last_slot = None
-    
-    while True:
-        try:
-            now_utc = datetime.now(timezone.utc)
-            if now_utc.hour % 4 == 0 and now_utc.minute >= 2:
-                slot_id = f"{now_utc.strftime('%Y-%m-%d')}_{now_utc.hour}"
-                if last_slot != slot_id:
-                    print(f"Triggering Scheduled 4-Hour Scan for slot {slot_id}...")
-                    execute_scan(config.TELEGRAM_CHAT_ID, is_scheduled=True)
-                    last_slot = slot_id
-        except Exception as e:
-            print(f"Error in 4-hour scheduler loop: {e}")
-            
-        time.sleep(30)
 
 def start_health_server():
+    """Lightweight HTTP server for cloud hosting health-checks (Render, Railway, etc.)"""
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import os
     port = int(os.getenv("PORT", 10000))
     
     class HealthHandler(BaseHTTPRequestHandler):
@@ -239,15 +225,12 @@ def start_health_server():
             self.end_headers()
             data = {
                 "status": "online",
-                "service": "Elite Crypto Trading & Cloud Breakout Radar Bot",
-                "strategies": [
-                    "1. EMA 9 / EMA 21 at Support (81% Success)",
-                    "2. MACD Bullish Cross at Support (72% Success)",
-                    "3. Ichimoku TK Cross at Support (70% Success)",
-                    "4. Stochastic (14,3,3) at Support (64% Success)",
-                    "5. Kumo Cloud Breakout Radar"
+                "service": "TMO Scalper & Hull Suite Trading Bot",
+                "models": [
+                    "1. Golden Model (Support + Hull Green + Green Candle + Volume >= 1.15x)",
+                    "2. Base Model (TMO Cross + Hull Green + Support)"
                 ],
-                "time_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                "time_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             }
             self.wfile.write(json.dumps(data).encode('utf-8'))
             
@@ -261,18 +244,16 @@ def start_health_server():
     except Exception as e:
         print(f"HTTP Server warning: {e}")
 
+
 if __name__ == "__main__":
     import sys
-    sys.stdout.reconfigure(encoding='utf-8')
-    print("Elite Crypto Trading Radar Bot starting...")
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    print("TMO Scalper & Hull Suite Trading Bot starting...")
     
     # Start Health Server
     health_thread = threading.Thread(target=start_health_server, daemon=True)
     health_thread.start()
-    
-    # Start 4-Hour Automatic Support Scheduler
-    scheduler_4h_thread = threading.Thread(target=four_hour_scheduler_loop, daemon=True)
-    scheduler_4h_thread.start()
     
     # Start Telegram Listener
     handle_telegram_updates()
