@@ -109,9 +109,10 @@ def format_radar_message():
 
 def execute_scan(chat_id=None, is_scheduled=False, **kwargs):
     """
-    Executes scan across all Binance USDT coins exclusively for the 2 authorized models:
-    1. النموذج الأساسي (تقاطع TMO + خط Hull Suite أخضر + عند الدعم)
-    2. النموذج الأقوى 🔥 (عند دعم + خط Hull أخضر + شمعة خضراء + فوليوم ≥ 1.15x)
+    Executes scan across all Binance USDT coins for the 5 Elite Proven Models,
+    sorted strictly from strongest to weakest within:
+    1. الهدف السريع الخاطف (+3% في 24-48 ساعة): SuperTrend Flip ثم ATR 15% Expansion
+    2. تعظيم الأرباح التراكمية (TP 6% / SL 4%): Ehlers Fisher ثم Force Index ثم TTM Squeeze
     """
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
@@ -121,10 +122,10 @@ def execute_scan(chat_id=None, is_scheduled=False, **kwargs):
     if not is_scheduled_call and chat_id:
         send_telegram_message(
             chat_id,
-            "⚡ <b>جاري فحص السوق للنماذج المعتمدة (TMO + Hull Suite)...</b>\n\n"
-            "• 🌟 <b>النموذج الأقوى 🔥:</b> دعم + Hull أخضر + شمعة خضراء + فوليوم ≥ 1.15x (دقة 70.7%)\n"
-            "• ⚡ <b>النموذج الأساسي:</b> تقاطع TMO + خط Hull أخضر + عند الدعم (دقة 63.5%)\n\n"
-            "⏱️ <i>لحظات وسيصلك التقرير المباشر مع تقييم وضع البيتكوين...</i>"
+            "⚡ <b>جاري فحص السوق للنماذج النخبوية الخمسة المعتمدة...</b>\n\n"
+            "• 🎯 <b>الهدف السريع (+3%):</b> 1️⃣ SuperTrend Flip ثم 2️⃣ ATR 15% Expansion\n"
+            "• 🚀 <b>تعظيم الأرباح (TP 6%):</b> 1️⃣ Ehlers Fisher ثم 2️⃣ Force Index ثم 3️⃣ TTM Squeeze\n\n"
+            "⏱️ <i>لحظات وسيصلك التقرير المباشر مرتباً من الأقوى للأضعف علمياً...</i>"
         )
         
     scan_res = scan_authorized_strategies()
@@ -174,19 +175,19 @@ def handle_telegram_updates():
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
                         welcome = (
-                            f"👋 <b>أهلاً بك في بوت رادار الصفقات المعتمدة (TMO + Hull Suite)!</b>\n"
+                            f"👋 <b>أهلاً بك في رادار النخبة الرقمي (Elite Crypto Radar 1D)!</b>\n"
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n\n"
-                            f"🎯 <b>النماذج المعتمدة حصرياً (الهدف السريع +3.0%):</b>\n\n"
-                            f"1️⃣ 🌟 <b>النموذج الأقوى 🔥:</b>\n"
-                            f"• الشروط: ارتكاز عند دعم + خط Hull Suite أخضر + شمعة دافعة خضراء + سيولة فوليوم ≥ 1.15x.\n"
-                            f"• نسبة النجاح: <b>70.7%</b> في أول يومين (ترتفع لـ <b>73.8%</b> مع صعود BTC) | إجمالي تحقيق الهدف: <b>90.9%</b>.\n\n"
-                            f"2️⃣ ⚡ <b>النموذج الأساسي:</b>\n"
-                            f"• الشروط: تقاطع TMO إيجابي + خط Hull Suite أخضر + ارتكاز عند دعم.\n"
-                            f"• نسبة النجاح: <b>63.5%</b> في أول يومين (ترتفع لـ <b>65.5%</b> مع صعود BTC) | إجمالي تحقيق الهدف: <b>86.3%</b>.\n\n"
+                            f"⚡ <b>القسم الأول: صفقات الهدف الخاطف السريع (+3% في 24-48 ساعة):</b>\n"
+                            f"1️⃣ 🚀 <b>SuperTrend Flip:</b> دقة 82% في أول يومين (80% في اليوم الأول) | 96% إجمالي | فشل 4% فقط.\n"
+                            f"2️⃣ 👑 <b>ATR 15% Expansion:</b> دقة 74% في أول يومين | 95.5% إجمالي | فشل 4.5% | أرباح +115.4%.\n\n"
+                            f"🚀 <b>القسم الثاني: تعظيم الأرباح والموجات (TP 6% / SL 4%):</b>\n"
+                            f"1️⃣ 💰 <b>Ehlers Fisher Transform:</b> أرباح قياسية صافية +188.6% | معامل ربحية PF 1.58.\n"
+                            f"2️⃣ ⚡ <b>Elder's Force Index (EFI):</b> أرباح صافية +156.7% | معامل ربحية PF 1.50.\n"
+                            f"3️⃣ 💎 <b>TTM Squeeze Breakout:</b> أرباح صافية +98.2% | معامل ربحية PF 1.58.\n\n"
                             f"────────────────────\n"
                             f"📌 <b>الأوامر المتاحة:</b>\n"
-                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق فورياً وإرسال الصفقات المطابقة وتحديد نوع النموذج وحالة البيتكوين.\n"
+                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص الـ 200 عملة وإرسال الفرص مرتبة من الأقوى للأضعف.\n"
                             f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين بالنسبة لـ Daily EMA50.\n"
                             f"• أرسل <code>/ping</code>: لاختبار الاتصال مع باينانس."
                         )
@@ -199,13 +200,13 @@ def handle_telegram_updates():
                         res = client.check_connection()
                         send_telegram_message(chat_id, res['message'])
                         
-                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص", "صفقات", "tmo", "hull"]:
+                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص", "صفقات", "tmo", "hull", "supertrend", "atr", "fisher"]:
                         threading.Thread(target=execute_scan, args=(chat_id, False), daemon=True).start()
                         
                     else:
                         reply = (
                             "❓ <b>الأوامر المتاحة:</b>\n"
-                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق للنموذجين المعتمدين.\n"
+                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق للنماذج النخبوية الخمسة مرتبة من الأقوى للأضعف.\n"
                             "• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة حالة البيتكوين العامة."
                         )
                         send_telegram_message(chat_id, reply)

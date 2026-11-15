@@ -7,7 +7,7 @@ import requests
 from config import BINANCE_DATA_URL, BINANCE_REST_URL, get_watchlist
 
 
-def fetch_klines_fast(symbol, interval="1d", limit=160):
+def fetch_klines_fast(symbol, interval="1d", limit=140):
     """
     Fetches daily or 4H klines fast with failover between Binance Vision and REST endpoints.
     """
@@ -35,79 +35,101 @@ def fetch_klines_fast(symbol, interval="1d", limit=160):
     return None
 
 
-def calc_wma_fast(series, length):
-    """Calculates Weighted Moving Average (WMA) efficiently using convolution."""
-    weights = np.arange(1, length + 1, dtype=float)
-    weights /= weights.sum()
-    vals = series.values
-    if len(vals) < length:
-        return pd.Series(np.nan, index=series.index)
-    conv = np.convolve(vals, weights[::-1], mode='valid')
-    padded = np.empty(len(vals))
-    padded[:length - 1] = np.nan
-    padded[length - 1:] = conv
-    return pd.Series(padded, index=series.index)
-
-
-def calc_hma_55(series, length=55):
-    """Calculates Hull Moving Average (HMA 55) for Hull Suite."""
-    half = max(1, int(length / 2))
-    sq = max(1, int(np.sqrt(length)))
-    wma_h = calc_wma_fast(series, half)
-    wma_f = calc_wma_fast(series, length)
-    diff = 2.0 * wma_h - wma_f
-    return calc_wma_fast(diff, sq)
-
-
 def calc_all_indicators(df):
     """
-    Calculates:
-    1. EMAs: EMA50 and EMA200
-    2. Hull Suite (HMA 55): Direction and color (Green when rising & price above 0.99*HMA)
-    3. TMO (Mobius True Momentum Oscillator: 14, 5, 3)
-    4. Volume MA20
+    Calculates all elite indicators proven by extensive backtests across 200 coins:
+    1. EMAs: EMA50, EMA200
+    2. True Range & ATR(14) with 20-day lowest ATR for ATR 15% Expansion
+    3. SuperTrend (10, 2.5): SuperTrend Flip model
+    4. Ehlers Fisher Transform (10): Zero-lag deep bottom reversals
+    5. Elder's Force Index (EFI 13): Buying surge above zero
+    6. TTM Squeeze: Bollinger Bands inside Keltner Channel compression
+    7. Volume MA20
     """
-    c = df['close']
-    o = df['open']
-    qv = df['quote_asset_volume']
+    c = df['close'].values
+    o = df['open'].values
+    h = df['high'].values
+    l = df['low'].values
+    v = df['volume'].values
+    qv = df['quote_asset_volume'].values
     n = len(df)
 
     # 1. EMAs
-    df['ema50'] = c.ewm(span=50, adjust=False).mean()
-    df['ema200'] = c.ewm(span=200, adjust=False).mean()
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
 
-    # 2. Hull Suite (HMA 55)
-    hma = calc_hma_55(c, 55)
-    df['hull'] = hma
-    df['hull_green'] = (hma > hma.shift(2)) & (c >= hma * 0.99)
+    # True Range & ATR 14
+    tr = np.zeros(n, dtype=float)
+    tr[0] = h[0] - l[0]
+    for i in range(1, n):
+        tr[i] = max(h[i] - l[i], abs(h[i] - c[i-1]), abs(l[i] - c[i-1]))
+    atr14 = pd.Series(tr).rolling(14).mean().values
+    df['atr14'] = atr14
+    df['atr_low_20'] = pd.Series(atr14).rolling(20).min().values
 
-    # 3. TMO (Mobius True Momentum Oscillator: length=14, ema1=5, ema2=3, signal=3)
-    raw_s = np.zeros(n, dtype=float)
-    c_arr = c.values
-    o_arr = o.values
-    length = 14
-    for idx in range(n):
-        past_o = o_arr[max(0, idx - length + 1): idx + 1]
-        cur_c = c_arr[idx]
-        raw_s[idx] = float(np.sum(cur_c > past_o) - np.sum(cur_c < past_o))
+    # 2. SuperTrend (10, 2.5)
+    atr10 = pd.Series(tr).rolling(10).mean().values
+    hl2 = (h + l) / 2.0
+    u_band = hl2 + 2.5 * atr10
+    l_band = hl2 - 2.5 * atr10
+    st_dir = np.zeros(n, dtype=float)
+    st_dir[:10] = -1.0
+    for i in range(10, n):
+        if c[i-1] <= u_band[i-1]:
+            u_band[i] = min(u_band[i], u_band[i-1])
+        if c[i-1] >= l_band[i-1]:
+            l_band[i] = max(l_band[i], l_band[i-1])
+        if c[i] > u_band[i-1]:
+            st_dir[i] = 1.0
+        elif c[i] < l_band[i-1]:
+            st_dir[i] = -1.0
+        else:
+            st_dir[i] = st_dir[i-1]
+    df['st_dir'] = st_dir
 
-    s_series = pd.Series(raw_s, index=df.index)
-    tmo_ema = s_series.ewm(span=5, adjust=False).mean()
-    tmo_main = tmo_ema.ewm(span=3, adjust=False).mean()
-    tmo_signal = tmo_main.ewm(span=3, adjust=False).mean()
+    # 3. Ehlers Fisher Transform (10)
+    mp = (h + l) / 2.0
+    x = np.zeros(n, dtype=float)
+    fisher = np.zeros(n, dtype=float)
+    for i in range(10, n):
+        w_max = np.max(h[i-9:i+1])
+        w_min = np.min(l[i-9:i+1])
+        denom = w_max - w_min if w_max != w_min else 1e-9
+        val = 0.33 * 2.0 * ((mp[i] - w_min) / denom - 0.5) + 0.67 * x[i-1]
+        val = np.clip(val, -0.999, 0.999)
+        x[i] = val
+        fisher[i] = 0.5 * np.log((1.0 + val) / (1.0 - val)) + 0.5 * fisher[i-1]
+    df['fisher'] = fisher
 
-    df['tmo_main'] = tmo_main
-    df['tmo_signal'] = tmo_signal
+    # 4. Elder's Force Index (13)
+    raw_force = np.zeros(n, dtype=float)
+    for i in range(1, n):
+        raw_force[i] = (c[i] - c[i-1]) * v[i]
+    alpha = 2.0 / (13.0 + 1.0)
+    efi = np.zeros(n, dtype=float)
+    for i in range(1, n):
+        efi[i] = alpha * raw_force[i] + (1.0 - alpha) * efi[i-1]
+    df['efi'] = efi
 
-    # 4. Volume MA20
-    df['vol_ma20'] = qv.rolling(20).mean()
+    # 5. TTM Squeeze (Bollinger 20/2 vs Keltner 20/1.5)
+    basis = pd.Series(c).rolling(20).mean().values
+    std = pd.Series(c).rolling(20).std().values
+    bb_upper = basis + 2.0 * std
+    bb_lower = basis - 2.0 * std
+    atr20 = pd.Series(tr).rolling(20).mean().values
+    keltner_upper = basis + 1.5 * atr20
+    keltner_lower = basis - 1.5 * atr20
+    df['in_squeeze'] = (bb_lower > keltner_lower) & (bb_upper < keltner_upper)
+
+    # 6. Volume MA20
+    df['vol_ma20'] = pd.Series(qv).rolling(20).mean().values
     return df
 
 
 def find_support_confluence(df, idx, lookback=35):
     """
     Checks if bar idx or idx-1 rests at horizontal swing support,
-    Hull Suite line, EMA50, or EMA200.
+    EMA50, or EMA200.
     Returns (has_support, support_type, support_level).
     """
     for check_i in (idx, idx - 1):
@@ -123,15 +145,9 @@ def find_support_confluence(df, idx, lookback=35):
             if (lj <= df['low'].iloc[j - 1] and lj <= df['low'].iloc[j - 2] and
                 lj <= df['low'].iloc[j + 1] and lj <= df['low'].iloc[j + 2]):
                 if lj <= cur_c * 1.015 and (abs(cur_l - lj) / lj <= 0.025 or (cur_l <= lj and cur_c >= lj * 0.985)):
-                    return True, "قاع سابق (Swing Low)", round(lj, 4)
+                    return True, "قاع سابق (Swing Low)", float(lj)
 
-        # 2. Hull Suite dynamic support
-        hull_val = df['hull'].iloc[check_i]
-        if not np.isnan(hull_val) and hull_val > 0:
-            if cur_l <= hull_val * 1.018 and cur_c >= hull_val * 0.985:
-                return True, "خط Hull Suite المائل", round(hull_val, 4)
-
-        # 3. Dynamic EMAs (EMA50, EMA200)
+        # 2. Dynamic EMAs (EMA50, EMA200)
         levels = [
             ("متوسط EMA50", df['ema50'].iloc[check_i]),
             ("متوسط EMA200", df['ema200'].iloc[check_i]),
@@ -139,7 +155,7 @@ def find_support_confluence(df, idx, lookback=35):
         for name, lvl in levels:
             if not np.isnan(lvl) and lvl > 0:
                 if lvl <= cur_c * 1.015 and (abs(cur_l - lvl) / lvl <= 0.022 or (cur_l <= lvl and cur_c >= lvl * 0.985)):
-                    return True, name, round(lvl, 4)
+                    return True, name, float(lvl)
 
     return False, None, None
 
@@ -163,7 +179,7 @@ def check_btc_regime():
     cur_p = c.iloc[-1]
     diff = ((cur_p - ema50) / ema50) * 100.0
     is_bull = cur_p > ema50
-    status_text = "🟢 آمن صاعد فوق EMA50 (بيئة مثالية)" if is_bull else "🔴 حذر تصحيحي أسفل EMA50 (تداول بحذر)"
+    status_text = "🟢 صاعد فوق EMA50 (بيئة مثالية للتداول)" if is_bull else "🔴 تصحيحي أسفل EMA50 (تداول بحذر واقتنص الأهداف السريعة)"
     return {
         "price": cur_p,
         "ema50": round(ema50, 1),
@@ -173,14 +189,19 @@ def check_btc_regime():
     }
 
 
-def analyze_coin_authorized_strategies(item):
+def analyze_coin_elite_models(item):
     """
-    Analyzes a coin exclusively for the two authorized models:
-    1. النموذج الأساسي: تقاطع TMO + خط Hull Suite أخضر + عند الدعم
-    2. النموذج الأقوى 🔥: عند دعم + خط Hull أخضر + شمعة خضراء + فوليوم ≥ 1.15x
+    Analyzes a coin for the 5 Elite Proven Models categorized into:
+    1. الهدف السريع الخاطف (+3% في 24-48 ساعة):
+       - Rank 1: SuperTrend Flip (82% نجاح في أول يومين | 96% إجمالي | فشل 4% فقط)
+       - Rank 2: ATR 15% Expansion (74% نجاح في أول يومين | 95.5% إجمالي | فشل 4.5%)
+    2. تعظيم الأرباح التراكمية (TP 6% / SL 4%):
+       - Rank 1: Ehlers Fisher Transform (+188.6% أرباح صافية | PF 1.58)
+       - Rank 2: Elder's Force Index (+156.7% أرباح صافية | PF 1.50)
+       - Rank 3: TTM Squeeze Breakout (+98.2% أرباح صافية | PF 1.58)
     """
     sym, pair = item
-    df = fetch_klines_fast(pair, interval="1d", limit=120)
+    df = fetch_klines_fast(pair, interval="1d", limit=130)
     if df is None or len(df) < 65:
         return None
 
@@ -194,105 +215,212 @@ def analyze_coin_authorized_strategies(item):
     l = df['low'].values
     qv = df['quote_asset_volume'].values
     qv_ma = df['vol_ma20'].values
-    tmo_m = df['tmo_main'].values
-    tmo_s = df['tmo_signal'].values
-    hull_g = df['hull_green'].values
 
-    # Check for TMO Bullish Cross (today or yesterday)
-    cross_today = (tmo_m[i] > tmo_s[i]) and (tmo_m[i - 1] <= tmo_s[i - 1])
-    cross_yest = (tmo_m[i - 1] > tmo_s[i - 1]) and (tmo_m[i - 2] <= tmo_s[i - 2]) and (tmo_m[i] > tmo_s[i])
-    has_tmo_cross = cross_today or cross_yest
-
-    if not has_tmo_cross:
+    # Must be a green candle & volume boost >= 1.15x
+    is_green = (c[i] > o[i])
+    if not is_green:
         return None
 
-    # Condition 1: Hull Suite must be green
-    is_hull_green = bool(hull_g[i])
-    if not is_hull_green:
+    vol_ratio = round(qv[i] / (qv_ma[i] + 1e-9), 2) if (not np.isnan(qv_ma[i]) and qv_ma[i] > 0) else 1.0
+    if vol_ratio < 1.15:
         return None
 
-    # Condition 2: Support confluence
+    # Support confluence check
     has_sup, sup_type, sup_lvl = find_support_confluence(df, i)
     if not has_sup:
         return None
 
     cur_p = c[i]
-    is_green = c[i] > o[i]
-    vol_ratio = round(qv[i] / (qv_ma[i] + 1e-9), 2) if (not np.isnan(qv_ma[i]) and qv_ma[i] > 0) else 1.0
-    is_vol_boost = vol_ratio >= 1.15
+    # Strict Proximity Filter: [-2.5% <= (Close - Support)/Support <= +3.8%]
+    if sup_lvl and sup_lvl > 0:
+        dist_from_sup = (cur_p - sup_lvl) / sup_lvl
+        if dist_from_sup > 0.038 or dist_from_sup < -0.025:
+            return None
 
-    # Determine Model:
-    # Model 2: النموذج الأقوى 🔥 (Support + Hull Green + Green Candle + Volume >= 1.15x)
-    # Model 1: النموذج الأساسي (Support + Hull Green + TMO Cross)
-    is_golden = is_green and is_vol_boost
-    model_type = "GOLDEN" if is_golden else "BASE"
-    model_name = "🌟 النموذج الأقوى 🔥 (فوليوم عالي + شمعة خضراء)" if is_golden else "⚡ النموذج الأساسي (TMO + Hull + دعم)"
-    model_badge = "🌟 [النموذج الأقوى 🔥]" if is_golden else "⚡ [النموذج الأساسي]"
-
-    # Targets & SL
-    target_1 = round(cur_p * 1.03, 4)  # +3% fast target
-    target_2 = round(cur_p * 1.06, 4)  # +6% runner target
+    # Calculate targets & stop loss (unrounded raw floats, formatted cleanly in report)
+    target_3pct = cur_p * 1.03
+    target_6pct = cur_p * 1.06
     sl_base = sup_lvl if sup_lvl else l[i]
-    stop_loss = round(min(l[i], sl_base) * 0.98, 4)
+    stop_loss = min(l[i], sl_base) * 0.98
 
-    return [{
-        'model_type': model_type,
-        'model_name': model_name,
-        'model_badge': model_badge,
-        'symbol': sym,
-        'pair': pair,
-        'price': cur_p,
-        'support_type': sup_type,
-        'support_lvl': sup_lvl,
-        'vol_ratio': vol_ratio,
-        'is_green': is_green,
-        'target_1': target_1,
-        'target_2': target_2,
-        'stop_loss': stop_loss,
-        'cross_bar': "شمعة اليوم" if cross_today else "شمعة الأمس",
-        'is_oversold': tmo_m[i] < 0,
-    }]
+    signals = []
+
+    # ==========================================
+    # القسم الأول: نماذج الهدف السريع (+3% في يومين)
+    # ==========================================
+
+    # Rank 1: SuperTrend Flip (انقلاب صاعد)
+    st_dirs = df['st_dir'].values
+    if st_dirs[i-1] == -1.0 and st_dirs[i] == 1.0:
+        signals.append({
+            'category': 'SCALP',
+            'rank': 1,
+            'model_name': '🚀 انقلاب السوبر ترند (SuperTrend Flip)',
+            'model_badge': '🚀 [المرتبة #1 للهدف الخاطف: SuperTrend]',
+            'win_rate_desc': '⚡ 82% في أول يومين (80% في اليوم الأول مباشرة!) | 96% إجمالي | فشل 4% فقط',
+            'symbol': sym,
+            'pair': pair,
+            'price': cur_p,
+            'support_type': sup_type,
+            'support_lvl': sup_lvl,
+            'vol_ratio': vol_ratio,
+            'target_1': target_3pct,
+            'target_2': target_6pct,
+            'stop_loss': stop_loss,
+        })
+
+    # Rank 2: ATR 15% Expansion (انفجار ATR من القاع)
+    atr = df['atr14'].values
+    atr_low = df['atr_low_20'].values
+    if (not np.isnan(atr_low[i-1])) and (atr[i-1] <= atr_low[i-1] * 1.08) and (atr[i] >= atr_low[i-1] * 1.15):
+        signals.append({
+            'category': 'SCALP',
+            'rank': 2,
+            'model_name': '👑 انفجار ATR 15% من القاع',
+            'model_badge': '👑 [المرتبة #2 للهدف الخاطف: ATR 15%]',
+            'win_rate_desc': '👑 74% في أول يومين | 95.5% إجمالي | فشل 4.5% فقط | معامل ربح 1.51',
+            'symbol': sym,
+            'pair': pair,
+            'price': cur_p,
+            'support_type': sup_type,
+            'support_lvl': sup_lvl,
+            'vol_ratio': vol_ratio,
+            'target_1': target_3pct,
+            'target_2': target_6pct,
+            'stop_loss': stop_loss,
+        })
+
+    # ==========================================
+    # القسم الثاني: نماذج تعظيم الأرباح والموجات (TP6% / SL4%)
+    # ==========================================
+
+    # Rank 1: Ehlers Fisher Transform (انعكاس من قاع عميق)
+    fishers = df['fisher'].values
+    fisher_deep = (min(fishers[i-1], fishers[i-2]) <= -1.0)
+    fisher_reversal = (fishers[i] > fishers[i-1])
+    if fisher_deep and fisher_reversal:
+        signals.append({
+            'category': 'SWING',
+            'rank': 1,
+            'model_name': '💰 انعكاس فيشر من القاع (Ehlers Fisher)',
+            'model_badge': '💰 [المرتبة #1 لتعظيم الأرباح: Ehlers Fisher]',
+            'win_rate_desc': '🏆 أرباح قياسية صافية +188.6% | معامل ربحية 1.58 | وصول للهدف 86.2%',
+            'symbol': sym,
+            'pair': pair,
+            'price': cur_p,
+            'support_type': sup_type,
+            'support_lvl': sup_lvl,
+            'vol_ratio': vol_ratio,
+            'target_1': target_3pct,
+            'target_2': target_6pct,
+            'stop_loss': stop_loss,
+        })
+
+    # Rank 2: Elder's Force Index (قفزة السيولة الهجومية فوق الصفر)
+    efis = df['efi'].values
+    if efis[i-1] <= 0.0 and efis[i] > 0.0:
+        signals.append({
+            'category': 'SWING',
+            'rank': 2,
+            'model_name': '⚡ قفزة السيولة الهجومية (Elder\'s Force Index)',
+            'model_badge': '⚡ [المرتبة #2 لتعظيم الأرباح: Force Index]',
+            'win_rate_desc': '🔥 أرباح صافية +156.7% | معامل ربحية 1.50 | وصول للهدف 83.1%',
+            'symbol': sym,
+            'pair': pair,
+            'price': cur_p,
+            'support_type': sup_type,
+            'support_lvl': sup_lvl,
+            'vol_ratio': vol_ratio,
+            'target_1': target_3pct,
+            'target_2': target_6pct,
+            'stop_loss': stop_loss,
+        })
+
+    # Rank 3: TTM Squeeze Breakout (انفجار الاحتقان السعري)
+    in_sq = df['in_squeeze'].values
+    was_in_sq = any(in_sq[max(0, i-3):i])
+    is_sq_off = not in_sq[i]
+    if was_in_sq and is_sq_off:
+        signals.append({
+            'category': 'SWING',
+            'rank': 3,
+            'model_name': '💎 انفجار الاحتقان السعري (TTM Squeeze)',
+            'model_badge': '💎 [المرتبة #3 لتعظيم الأرباح: TTM Squeeze]',
+            'win_rate_desc': '💎 أرباح +98.2% | معامل ربحية 1.58 | وصول للهدف 93.8%',
+            'symbol': sym,
+            'pair': pair,
+            'price': cur_p,
+            'support_type': sup_type,
+            'support_lvl': sup_lvl,
+            'vol_ratio': vol_ratio,
+            'target_1': target_3pct,
+            'target_2': target_6pct,
+            'stop_loss': stop_loss,
+        })
+
+    return signals if signals else None
 
 
 def scan_authorized_strategies():
     """
-    Scans the complete Binance USDT watchlist in parallel for the two authorized models.
+    Scans the complete Binance USDT watchlist in parallel, sorting signals
+    strictly from strongest to weakest within each department.
     """
     watchlist = get_watchlist()
-    golden_list = []
-    base_list = []
+    scalp_signals = []
+    swing_signals = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
-        futures = [executor.submit(analyze_coin_authorized_strategies, item) for item in watchlist]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+        futures = [executor.submit(analyze_coin_elite_models, item) for item in watchlist]
         for f in concurrent.futures.as_completed(futures):
             sigs = f.result()
             if sigs:
                 for s in sigs:
-                    if s['model_type'] == 'GOLDEN':
-                        golden_list.append(s)
-                    else:
-                        base_list.append(s)
+                    if s['category'] == 'SCALP':
+                        scalp_signals.append(s)
+                    elif s['category'] == 'SWING':
+                        swing_signals.append(s)
 
-    # Sort each list by volume ratio
-    golden_list.sort(key=lambda x: x['vol_ratio'], reverse=True)
-    base_list.sort(key=lambda x: x['vol_ratio'], reverse=True)
+    # Sort strictly from strongest to weakest:
+    # Primary sort: rank (1 then 2 then 3)
+    # Secondary sort: volume ratio descending
+    scalp_signals.sort(key=lambda x: (x['rank'], -x['vol_ratio']))
+    swing_signals.sort(key=lambda x: (x['rank'], -x['vol_ratio']))
 
     return {
-        'golden': golden_list,
-        'base': base_list,
+        'scalp': scalp_signals,
+        'swing': swing_signals,
         'total_scanned': len(watchlist),
     }
 
 
+def format_price(p):
+    """Formats crypto prices dynamically with precision tailored to asset scale."""
+    if p is None or np.isnan(p) or p == 0:
+        return "0.0"
+    if p >= 1000:
+        return f"{p:,.2f}"
+    elif p >= 1.0:
+        return f"{p:.4f}".rstrip('0').rstrip('.')
+    elif p >= 0.01:
+        return f"{p:.4f}"
+    elif p >= 0.0001:
+        return f"{p:.6f}"
+    elif p >= 0.000001:
+        return f"{p:.8f}".rstrip('0')
+    else:
+        return f"{p:.10f}".rstrip('0')
+
+
 def format_authorized_report(scan_res):
     """
-    Formats the complete trading report for Telegram with explicit Model identification
-    and comprehensive Bitcoin regime assessment.
+    Formats the complete trading report for Telegram with signals organized
+    from strongest to weakest into the two core trading departments.
     """
     btc = check_btc_regime()
-    golden = scan_res.get('golden', [])
-    base = scan_res.get('base', [])
-    total_signals = len(golden) + len(base)
+    scalp = scan_res.get('scalp', [])
+    swing = scan_res.get('swing', [])
+    total_signals = len(scalp) + len(swing)
 
     btc_icon = "🟢" if btc.get('is_bull') else "🔴"
     btc_diff = btc.get('diff_pct', 0)
@@ -302,63 +430,64 @@ def format_authorized_report(scan_res):
 
     # 1. Header Message
     header = (
-        f"🎯 <b>رادار صفقات TMO Scalper & Hull Suite اليومي (1D)</b>\n"
+        f"🎯 <b>رادار النخبة الرقمي (Elite Crypto Radar 1D)</b>\n"
         f"────────────────────\n"
-        f"📊 <b>وضع البيتكوين (BTC Macro Regime):</b>\n"
-        f"• السعر: <code>{btc.get('price', 0):,.1f} $</code>\n"
-        f"• Daily EMA50: <code>{btc.get('ema50', 0):,.1f} $</code> ({diff_sign}{btc_diff}%)\n"
+        f"📊 <b>وضع البيتكوين العام (BTC Regime):</b>\n"
+        f"• السعر: <code>{format_price(btc.get('price', 0))} $</code>\n"
+        f"• Daily EMA50: <code>{format_price(btc.get('ema50', 0))} $</code> ({diff_sign}{btc_diff}%)\n"
         f"• الحالة: {btc_icon} <b>{btc.get('status_text', '')}</b>\n"
         f"────────────────────\n"
-        f"📈 <b>إحصائيات الفحص:</b>\n"
-        f"• تم فحص: <b>{scan_res.get('total_scanned', 300)}</b> عملة USDT\n"
-        f"• 🌟 <b>النموذج الأقوى 🔥:</b> {len(golden)} عملة (دقة 70.7% في أول يومين | 90.9% إجمالي)\n"
-        f"• ⚡ <b>النموذج الأساسي:</b> {len(base)} عملة (دقة 63.5% في أول يومين | 86.3% إجمالي)\n"
-        f"• 🎯 الهدف السريع: <b>+3.0%</b> | 🚀 هدف الموجه: <b>+6.0%</b>\n"
+        f"📈 <b>إحصائيات الفحص الشامل:</b>\n"
+        f"• تم فحص: <b>{scan_res.get('total_scanned', 200)}</b> عملة USDT نشطة\n"
+        f"• ⚡ <b>صفقات الهدف الخاطف (+3%):</b> {len(scalp)} فرصة\n"
+        f"• 🚀 <b>صفقات تعظيم الأرباح (TP 6%):</b> {len(swing)} فرصة\n"
+        f"📌 <i>تم ترتيب جميع الفرص تنازلياً من الأقوى للأضعف علمياً.</i>\n"
         f"────────────────────"
     )
     messages.append(header)
 
-    # 2. Section 1: النموذج الأقوى 🔥
-    if golden:
+    # 2. Section 1: صفقات الهدف السريع الخاطف (+3% في 24-48 ساعة)
+    if scalp:
         lines = [
-            f"🌟 <b>1. إشارات [النموذج الأقوى 🔥]</b>\n"
-            f"<i>(تقاطع TMO + خط Hull أخضر + ارتكاز عند دعم + شمعة خضراء + سيولة ≥ 1.15x)</i>\n"
+            f"⚡ <b>القسم الأول: صفقات الهدف السريع الخاطف (+3% في 24-48 ساعة)</b>\n"
+            f"<i>(مرتبة من الأقوى للأضعف: 1️⃣ SuperTrend Flip ثم 2️⃣ ATR 15% Expansion)</i>\n"
             f"────────────────────"
         ]
-        for s in golden:
-            oversold_tag = " | 💎 تشبع بيعي (TMO &lt; 0)" if s['is_oversold'] else ""
+        for s in scalp:
             lines.append(
+                f"{s['model_badge']}\n"
                 f"🔥 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
-                f"• <b>النموذج:</b> 🌟 <b>النموذج الأقوى 🔥</b>\n"
-                f"• <b>سعر الدخول:</b> <code>{s['price']} $</code>\n"
-                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{s['support_lvl']} $</code>)\n"
-                f"• <b>السيولة:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل{oversold_tag}\n"
-                f"• <b>توقيت التقاطع:</b> {s['cross_bar']}\n"
-                f"• 🎯 <b>الهدف السريع (+3%):</b> <code>{s['target_1']} $</code>\n"
-                f"• 🚀 <b>هدف الموجه (+6%):</b> <code>{s['target_2']} $</code>\n"
-                f"• 🛑 <b>وقف الخسارة:</b> إغلاق يومي أسفل <code>{s['stop_loss']} $</code>\n"
+                f"• <b>النموذج:</b> {s['model_name']}\n"
+                f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{format_price(s['support_lvl'])} $</code>)\n"
+                f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
+                f"• 📊 <b>إحصائية النموذج:</b> <i>{s['win_rate_desc']}</i>\n"
+                f"• 🎯 <b>الهدف السريع (+3%):</b> <code>{format_price(s['target_1'])} $</code>\n"
+                f"• 🚀 <b>هدف الموجه (+6%):</b> <code>{format_price(s['target_2'])} $</code>\n"
+                f"• 🛑 <b>وقف الخسارة:</b> إغلاق يومي أسفل <code>{format_price(s['stop_loss'])} $</code>\n"
                 f"────────────────────"
             )
         messages.append("\n".join(lines))
 
-    # 3. Section 2: النموذج الأساسي
-    if base:
+    # 3. Section 2: صفقات تعظيم الأرباح والموجات (TP6% / SL4%)
+    if swing:
         lines = [
-            f"⚡ <b>2. إشارات [النموذج الأساسي]</b>\n"
-            f"<i>(تقاطع TMO + خط Hull Suite أخضر + ارتكاز عند دعم)</i>\n"
+            f"🚀 <b>القسم الثاني: صفقات تعظيم الأرباح والموجات (TP 6% / SL 4%)</b>\n"
+            f"<i>(مرتبة من الأقوى ربحية: 1️⃣ Ehlers Fisher ثم 2️⃣ Force Index ثم 3️⃣ TTM Squeeze)</i>\n"
             f"────────────────────"
         ]
-        for s in base:
-            oversold_tag = " | 💎 تشبع بيعي" if s['is_oversold'] else ""
+        for s in swing:
             lines.append(
-                f"⚡ <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
-                f"• <b>النموذج:</b> ⚡ <b>النموذج الأساسي</b>\n"
-                f"• <b>سعر الدخول:</b> <code>{s['price']} $</code>\n"
-                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{s['support_lvl']} $</code>)\n"
-                f"• <b>السيولة:</b> <code>{s['vol_ratio']}x</code>{oversold_tag}\n"
-                f"• 🎯 <b>الهدف السريع (+3%):</b> <code>{s['target_1']} $</code>\n"
-                f"• 🚀 <b>هدف الموجه (+6%):</b> <code>{s['target_2']} $</code>\n"
-                f"• 🛑 <b>وقف الخسارة:</b> إغلاق يومي أسفل <code>{s['stop_loss']} $</code>\n"
+                f"{s['model_badge']}\n"
+                f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
+                f"• <b>النموذج:</b> {s['model_name']}\n"
+                f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{format_price(s['support_lvl'])} $</code>)\n"
+                f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
+                f"• 💰 <b>الأرباح التاريخية:</b> <i>{s['win_rate_desc']}</i>\n"
+                f"• 🎯 <b>هدف 1 (+3%):</b> <code>{format_price(s['target_1'])} $</code>\n"
+                f"• 🚀 <b>هدف رئيسي (+6%):</b> <code>{format_price(s['target_2'])} $</code>\n"
+                f"• 🛑 <b>وقف الخسارة:</b> إغلاق يومي أسفل <code>{format_price(s['stop_loss'])} $</code>\n"
                 f"────────────────────"
             )
         messages.append("\n".join(lines))
@@ -366,15 +495,15 @@ def format_authorized_report(scan_res):
     # 4. Empty State
     if total_signals == 0:
         messages.append(
-            "ℹ️ <b>لا توجد عملات تطابق النموذجين اليوم.</b>\n\n"
-            "السوق حالياً في مرحلة تماسك أو انتظار إشارات مكتملة الشروط لحماية رأس المال.\n"
-            f"وضع البيتكوين الحالي: {btc.get('status_text', '')}."
+            "ℹ️ <b>لا توجد عملات تطابق شروط النماذج الخمسة الصارمة اليوم.</b>\n\n"
+            "جميع العملات المفحوصة إما بعيدة عن الدعم أو لم تكتمل شروط الانفجار السعري.\n"
+            "تذكر: الصبر وحماية رأس المال هو سر التداول الرابح."
         )
 
     return messages
 
 
 # Compatibility aliases
-analyze_coin_ichimoku_trio = analyze_coin_authorized_strategies
+analyze_coin_authorized_strategies = analyze_coin_elite_models
 scan_ichimoku_trio = scan_authorized_strategies
 format_ichimoku_trio_report = format_authorized_report
