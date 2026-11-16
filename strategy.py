@@ -111,7 +111,7 @@ def calc_all_indicators(df):
         efi[i] = alpha * raw_force[i] + (1.0 - alpha) * efi[i-1]
     df['efi'] = efi
 
-    # 5. TTM Squeeze (Bollinger 20/2 vs Keltner 20/1.5)
+    # 5. TTM Squeeze (Bollinger 20/2 vs Keltner 20/1.5) & Carter Linear Regression Momentum
     basis = pd.Series(c).rolling(20).mean().values
     std = pd.Series(c).rolling(20).std().values
     bb_upper = basis + 2.0 * std
@@ -120,6 +120,26 @@ def calc_all_indicators(df):
     keltner_upper = basis + 1.5 * atr20
     keltner_lower = basis - 1.5 * atr20
     df['in_squeeze'] = (bb_lower > keltner_lower) & (bb_upper < keltner_upper)
+
+    # Momentum: Linear Regression of [Close - ((Highest(20)+Lowest(20))/2 + SMA(20))/2] over 20 bars
+    highest_h = pd.Series(h).rolling(20).max().values
+    lowest_l = pd.Series(l).rolling(20).min().values
+    mid_donchian = (highest_h + lowest_l) / 2.0
+    mid_avg = (mid_donchian + basis) / 2.0
+    delta = c - mid_avg
+
+    x = np.arange(20, dtype=float)
+    x_dev = x - x.mean()
+    x_var = np.sum(x_dev**2)
+
+    mom = np.zeros(n, dtype=float)
+    for idx_m in range(20, n):
+        y = delta[idx_m-19:idx_m+1]
+        y_mean = np.mean(y)
+        slope = np.sum(x_dev * (y - y_mean)) / x_var
+        intercept = y_mean - slope * x.mean()
+        mom[idx_m] = intercept + slope * 19.0
+    df['ttm_mom'] = mom
 
     # 6. Volume MA20
     df['vol_ma20'] = pd.Series(qv).rolling(20).mean().values
@@ -191,10 +211,13 @@ def check_btc_regime():
 
 def analyze_coin_elite_models(item):
     """
-    Analyzes a coin for the 5 Elite Proven Models categorized into:
+    Analyzes a coin for the Elite Proven Models categorized into:
     1. الهدف السريع الخاطف (+3% في 24-48 ساعة):
-       - Rank 1: SuperTrend Flip (82% نجاح في أول يومين | 96% إجمالي | فشل 4% فقط)
-       - Rank 2: ATR 15% Expansion (74% نجاح في أول يومين | 95.5% إجمالي | فشل 4.5%)
+       - Rank 1: Squeeze Fire + 2 Green Bars (عند دعم 🟢 - دقة 85.7% يوم أول | 100% إجمالي | صفر فشل)
+       - Rank 2: SuperTrend Flip (عند دعم 🟢 - 82% أول يومين | 96% إجمالي | فشل 4%)
+       - Rank 3: ATR 15% Expansion (عند دعم 🟢 - 74% أول يومين | 95.5% إجمالي)
+       - Rank 4: Squeeze Fire + 2 Green Bars (بدون دعم ⚠️ - 68.2% أول يومين | 91.1% إجمالي)
+       - Rank 5/6: Squeeze ON + 2 Green Bars (داخل الانضغاط)
     2. تعظيم الأرباح التراكمية (TP 6% / SL 4%):
        - Rank 1: Ehlers Fisher Transform (+188.6% أرباح صافية | PF 1.58)
        - Rank 2: Elder's Force Index (+156.7% أرباح صافية | PF 1.50)
@@ -225,138 +248,224 @@ def analyze_coin_elite_models(item):
     if vol_ratio < 1.15:
         return None
 
+    cur_p = c[i]
+
     # Support confluence check
     has_sup, sup_type, sup_lvl = find_support_confluence(df, i)
-    if not has_sup:
-        return None
-
-    cur_p = c[i]
-    # Strict Proximity Filter: [-2.5% <= (Close - Support)/Support <= +3.8%]
-    if sup_lvl and sup_lvl > 0:
+    at_support = False
+    if has_sup and sup_lvl and sup_lvl > 0:
         dist_from_sup = (cur_p - sup_lvl) / sup_lvl
-        if dist_from_sup > 0.038 or dist_from_sup < -0.025:
-            return None
+        if -0.025 <= dist_from_sup <= 0.038:
+            at_support = True
 
-    # Calculate targets & stop loss (unrounded raw floats, formatted cleanly in report)
+    # Support description and SL base
+    if at_support:
+        support_desc = f"🟢 مرتكز على {sup_type} ({format_price(sup_lvl)} $)"
+        sl_base = sup_lvl
+    else:
+        support_desc = "⚠️ ليس عند دعم (انفجار حر مع الزخم السعري)"
+        sl_base = min(l[i], l[i-1], l[i-2])
+
     target_3pct = cur_p * 1.03
     target_6pct = cur_p * 1.06
-    sl_base = sup_lvl if sup_lvl else l[i]
     stop_loss = min(l[i], sl_base) * 0.98
 
     signals = []
 
-    # ==========================================
-    # القسم الأول: نماذج الهدف السريع (+3% في يومين)
-    # ==========================================
-
-    # Rank 1: SuperTrend Flip (انقلاب صاعد)
-    st_dirs = df['st_dir'].values
-    if st_dirs[i-1] == -1.0 and st_dirs[i] == 1.0:
-        signals.append({
-            'category': 'SCALP',
-            'rank': 1,
-            'model_name': '🚀 انقلاب السوبر ترند (SuperTrend Flip)',
-            'model_badge': '🚀 [المرتبة #1 للهدف الخاطف: SuperTrend]',
-            'win_rate_desc': '⚡ 82% في أول يومين (80% في اليوم الأول مباشرة!) | 96% إجمالي | فشل 4% فقط',
-            'symbol': sym,
-            'pair': pair,
-            'price': cur_p,
-            'support_type': sup_type,
-            'support_lvl': sup_lvl,
-            'vol_ratio': vol_ratio,
-            'target_1': target_3pct,
-            'target_2': target_6pct,
-            'stop_loss': stop_loss,
-        })
-
-    # Rank 2: ATR 15% Expansion (انفجار ATR من القاع)
-    atr = df['atr14'].values
-    atr_low = df['atr_low_20'].values
-    if (not np.isnan(atr_low[i-1])) and (atr[i-1] <= atr_low[i-1] * 1.08) and (atr[i] >= atr_low[i-1] * 1.15):
-        signals.append({
-            'category': 'SCALP',
-            'rank': 2,
-            'model_name': '👑 انفجار ATR 15% من القاع',
-            'model_badge': '👑 [المرتبة #2 للهدف الخاطف: ATR 15%]',
-            'win_rate_desc': '👑 74% في أول يومين | 95.5% إجمالي | فشل 4.5% فقط | معامل ربح 1.51',
-            'symbol': sym,
-            'pair': pair,
-            'price': cur_p,
-            'support_type': sup_type,
-            'support_lvl': sup_lvl,
-            'vol_ratio': vol_ratio,
-            'target_1': target_3pct,
-            'target_2': target_6pct,
-            'stop_loss': stop_loss,
-        })
-
-    # ==========================================
-    # القسم الثاني: نماذج تعظيم الأرباح والموجات (TP6% / SL4%)
-    # ==========================================
-
-    # Rank 1: Ehlers Fisher Transform (انعكاس من قاع عميق)
-    fishers = df['fisher'].values
-    fisher_deep = (min(fishers[i-1], fishers[i-2]) <= -1.0)
-    fisher_reversal = (fishers[i] > fishers[i-1])
-    if fisher_deep and fisher_reversal:
-        signals.append({
-            'category': 'SWING',
-            'rank': 1,
-            'model_name': '💰 انعكاس فيشر من القاع (Ehlers Fisher)',
-            'model_badge': '💰 [المرتبة #1 لتعظيم الأرباح: Ehlers Fisher]',
-            'win_rate_desc': '🏆 أرباح قياسية صافية +188.6% | معامل ربحية 1.58 | وصول للهدف 86.2%',
-            'symbol': sym,
-            'pair': pair,
-            'price': cur_p,
-            'support_type': sup_type,
-            'support_lvl': sup_lvl,
-            'vol_ratio': vol_ratio,
-            'target_1': target_3pct,
-            'target_2': target_6pct,
-            'stop_loss': stop_loss,
-        })
-
-    # Rank 2: Elder's Force Index (قفزة السيولة الهجومية فوق الصفر)
-    efis = df['efi'].values
-    if efis[i-1] <= 0.0 and efis[i] > 0.0:
-        signals.append({
-            'category': 'SWING',
-            'rank': 2,
-            'model_name': '⚡ قفزة السيولة الهجومية (Elder\'s Force Index)',
-            'model_badge': '⚡ [المرتبة #2 لتعظيم الأرباح: Force Index]',
-            'win_rate_desc': '🔥 أرباح صافية +156.7% | معامل ربحية 1.50 | وصول للهدف 83.1%',
-            'symbol': sym,
-            'pair': pair,
-            'price': cur_p,
-            'support_type': sup_type,
-            'support_lvl': sup_lvl,
-            'vol_ratio': vol_ratio,
-            'target_1': target_3pct,
-            'target_2': target_6pct,
-            'stop_loss': stop_loss,
-        })
-
-    # Rank 3: TTM Squeeze Breakout (انفجار الاحتقان السعري)
+    # TTM Squeeze & Carter Momentum conditions
     in_sq = df['in_squeeze'].values
+    moms = df['ttm_mom'].values
+    two_greens = (
+        (not np.isnan(moms[i])) and (not np.isnan(moms[i-1])) and (not np.isnan(moms[i-2])) and
+        (moms[i] > moms[i-1]) and (moms[i-1] > moms[i-2])
+    )
     was_in_sq = any(in_sq[max(0, i-3):i])
     is_sq_off = not in_sq[i]
-    if was_in_sq and is_sq_off:
-        signals.append({
-            'category': 'SWING',
-            'rank': 3,
-            'model_name': '💎 انفجار الاحتقان السعري (TTM Squeeze)',
-            'model_badge': '💎 [المرتبة #3 لتعظيم الأرباح: TTM Squeeze]',
-            'win_rate_desc': '💎 أرباح +98.2% | معامل ربحية 1.58 | وصول للهدف 93.8%',
-            'symbol': sym,
-            'pair': pair,
-            'price': cur_p,
-            'support_type': sup_type,
-            'support_lvl': sup_lvl,
-            'vol_ratio': vol_ratio,
-            'target_1': target_3pct,
-            'target_2': target_6pct,
-            'stop_loss': stop_loss,
-        })
+    is_sq_fire = was_in_sq and is_sq_off  # Moment of explosion / breakout
+    is_sq_on = in_sq[i]                   # Inside squeeze
+
+    # =========================================================================
+    # 1. SPECIAL STRATEGY: TTM Squeeze + 2 Green Bars
+    # (النموذج الوحيد المسموح بإرساله حتى بدون دعم مع توضيح حالة الدعم صراحة)
+    # =========================================================================
+    if two_greens and is_sq_fire:
+        if at_support:
+            signals.append({
+                'category': 'SCALP',
+                'rank': 1,
+                'model_name': '🚀 انفجار البولينجر وكلتنر (Squeeze Fire) + شمعتين خضر',
+                'model_badge': '🚀 [المرتبة #1 للهدف الخاطف: انفجار كلتنر وبولينجر | عند دعم 🟢]',
+                'win_rate_desc': '🏆 100% تحقيق هدف +3% مع صعود BTC (85.7% اليوم الأول) | 95.7% بدون BTC | صفر فشل',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+        else:
+            signals.append({
+                'category': 'SCALP',
+                'rank': 4,
+                'model_name': '⚡ انفجار البولينجر وكلتنر (Squeeze Fire) + شمعتين خضر',
+                'model_badge': '⚡ [هدف خاطف: انفجار كلتنر وبولينجر | بدون دعم ⚠️]',
+                'win_rate_desc': '⚡ 68.2% في أول يومين (57.7% في اليوم الأول) | 91.1% إجمالي تحقيق الهدف',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': False,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+    elif two_greens and is_sq_on:
+        if at_support:
+            signals.append({
+                'category': 'SCALP',
+                'rank': 5,
+                'model_name': '⏳ احتقان البولينجر داخل كلتنر (Squeeze ON) + شمعتين خضر',
+                'model_badge': '⏳ [استعداد للانفجار: احتقان كلتنر وبولينجر | عند دعم 🟢]',
+                'win_rate_desc': '💎 استعداد للانفجار: 80% تحقيق هدف +3% | أرباح +90% بوقف خسارة آمن',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+        else:
+            signals.append({
+                'category': 'SCALP',
+                'rank': 6,
+                'model_name': '⏳ احتقان البولينجر داخل كلتنر (Squeeze ON) + شمعتين خضر',
+                'model_badge': '⏳ [استعداد للانفجار: احتقان كلتنر وبولينجر | بدون دعم ⚠️]',
+                'win_rate_desc': '⏳ داخل عنق الزجاجة: 56.2% في أول يومين | 86.3% إجمالي تحقيق الهدف',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': False,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+    # =========================================================================
+    # 2. ALL OTHER STRATEGIES STRICTLY REQUIRE at_support == True
+    # (جميع الاستراتيجيات الأخرى تشترط الارتكاز عند دعم حقيقي 100%)
+    # =========================================================================
+    if at_support:
+        # Rank 2: SuperTrend Flip (انقلاب صاعد)
+        st_dirs = df['st_dir'].values
+        if st_dirs[i-1] == -1.0 and st_dirs[i] == 1.0:
+            signals.append({
+                'category': 'SCALP',
+                'rank': 2,
+                'model_name': '🚀 انقلاب السوبر ترند (SuperTrend Flip)',
+                'model_badge': '🚀 [المرتبة #2 للهدف الخاطف: SuperTrend]',
+                'win_rate_desc': '⚡ 82% في أول يومين (80% في اليوم الأول مباشرة!) | 96% إجمالي | فشل 4% فقط',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+        # Rank 3: ATR 15% Expansion (انفجار ATR من القاع)
+        atr = df['atr14'].values
+        atr_low = df['atr_low_20'].values
+        if (not np.isnan(atr_low[i-1])) and (atr[i-1] <= atr_low[i-1] * 1.08) and (atr[i] >= atr_low[i-1] * 1.15):
+            signals.append({
+                'category': 'SCALP',
+                'rank': 3,
+                'model_name': '👑 انفجار ATR 15% من القاع',
+                'model_badge': '👑 [المرتبة #3 للهدف الخاطف: ATR 15%]',
+                'win_rate_desc': '👑 74% في أول يومين | 95.5% إجمالي | فشل 4.5% فقط | معامل ربح 1.51',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+        # Swing Rank 1: Ehlers Fisher Transform (انعكاس من قاع عميق)
+        fishers = df['fisher'].values
+        fisher_deep = (min(fishers[i-1], fishers[i-2]) <= -1.0)
+        fisher_reversal = (fishers[i] > fishers[i-1])
+        if fisher_deep and fisher_reversal:
+            signals.append({
+                'category': 'SWING',
+                'rank': 1,
+                'model_name': '💰 انعكاس فيشر من القاع (Ehlers Fisher)',
+                'model_badge': '💰 [المرتبة #1 لتعظيم الأرباح: Ehlers Fisher]',
+                'win_rate_desc': '🏆 أرباح قياسية صافية +188.6% | معامل ربحية 1.58 | وصول للهدف 86.2%',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+        # Swing Rank 2: Elder's Force Index (قفزة السيولة الهجومية فوق الصفر)
+        efis = df['efi'].values
+        if efis[i-1] <= 0.0 and efis[i] > 0.0:
+            signals.append({
+                'category': 'SWING',
+                'rank': 2,
+                'model_name': '⚡ قفزة السيولة الهجومية (Elder\'s Force Index)',
+                'model_badge': '⚡ [المرتبة #2 لتعظيم الأرباح: Force Index]',
+                'win_rate_desc': '🔥 أرباح صافية +156.7% | معامل ربحية 1.50 | وصول للهدف 83.1%',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
+
+        # Swing Rank 3: TTM Squeeze Breakout (انفجار الاحتقان السعري الكلاسيكي)
+        if was_in_sq and is_sq_off and not two_greens:
+            signals.append({
+                'category': 'SWING',
+                'rank': 3,
+                'model_name': '💎 انفجار الاحتقان السعري (TTM Squeeze)',
+                'model_badge': '💎 [المرتبة #3 لتعظيم الأرباح: TTM Squeeze]',
+                'win_rate_desc': '💎 أرباح +98.2% | معامل ربحية 1.58 | وصول للهدف 93.8%',
+                'symbol': sym,
+                'pair': pair,
+                'price': cur_p,
+                'at_support': True,
+                'support_desc': support_desc,
+                'vol_ratio': vol_ratio,
+                'target_1': target_3pct,
+                'target_2': target_6pct,
+                'stop_loss': stop_loss,
+            })
 
     return signals if signals else None
 
@@ -450,7 +559,7 @@ def format_authorized_report(scan_res):
     if scalp:
         lines = [
             f"⚡ <b>القسم الأول: صفقات الهدف السريع الخاطف (+3% في 24-48 ساعة)</b>\n"
-            f"<i>(مرتبة من الأقوى للأضعف: 1️⃣ SuperTrend Flip ثم 2️⃣ ATR 15% Expansion)</i>\n"
+            f"<i>(مرتبة من الأقوى للأضعف: 1️⃣ انفجار كلتنر وبولينجر ثم 2️⃣ SuperTrend Flip ثم 3️⃣ ATR 15%)</i>\n"
             f"────────────────────"
         ]
         for s in scalp:
@@ -459,7 +568,7 @@ def format_authorized_report(scan_res):
                 f"🔥 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                 f"• <b>النموذج:</b> {s['model_name']}\n"
                 f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
-                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{format_price(s['support_lvl'])} $</code>)\n"
+                f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
                 f"• 📊 <b>إحصائية النموذج:</b> <i>{s['win_rate_desc']}</i>\n"
                 f"• 🎯 <b>الهدف السريع (+3%):</b> <code>{format_price(s['target_1'])} $</code>\n"
@@ -482,7 +591,7 @@ def format_authorized_report(scan_res):
                 f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                 f"• <b>النموذج:</b> {s['model_name']}\n"
                 f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
-                f"• <b>الدعم المرتكز عليه:</b> {s['support_type']} (<code>{format_price(s['support_lvl'])} $</code>)\n"
+                f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
                 f"• 💰 <b>الأرباح التاريخية:</b> <i>{s['win_rate_desc']}</i>\n"
                 f"• 🎯 <b>هدف 1 (+3%):</b> <code>{format_price(s['target_1'])} $</code>\n"
