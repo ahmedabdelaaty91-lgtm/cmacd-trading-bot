@@ -676,11 +676,24 @@ def format_authorized_report(scan_res):
             else:
                 models_block = f"• <b>النموذج:</b> {s['model_name']}"
 
+            intra = inspect_intraday_status(s['symbol'], s['pair'], s['price'])
+            if intra.get('is_running'):
+                price_block = (
+                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code> (انطلقت <code>{intra['ignition_time']}</code>)\n"
+                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
+                    f"• <b>⚠️ حالة الصفقة:</b> <b>قيد التشغيل حالياً - لا يُنصح بالدخول المتأخر (للمتابعة فقط)</b>"
+                )
+            else:
+                price_block = (
+                    f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                    f"• <b>🟢 حالة الصفقة:</b> <b>فرصة طازجة في نطاق الشراء الآمن الآن</b>"
+                )
+
             lines.append(
                 f"{s['model_badge']}\n"
                 f"🔥 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                 f"{models_block}\n"
-                f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                f"{price_block}\n"
                 f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
                 f"• 📊 <b>إحصائية النموذج:</b> <i>{s['win_rate_desc']}</i>\n"
@@ -707,11 +720,24 @@ def format_authorized_report(scan_res):
             else:
                 models_block = f"• <b>النموذج:</b> {s['model_name']}"
 
+            intra = inspect_intraday_status(s['symbol'], s['pair'], s['price'])
+            if intra.get('is_running'):
+                price_block = (
+                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code> (انطلقت <code>{intra['ignition_time']}</code>)\n"
+                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
+                    f"• <b>⚠️ حالة الصفقة:</b> <b>قيد التشغيل حالياً - لا يُنصح بالدخول المتأخر (للمتابعة فقط)</b>"
+                )
+            else:
+                price_block = (
+                    f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                    f"• <b>🟢 حالة الصفقة:</b> <b>فرصة طازجة في نطاق الشراء الآمن الآن</b>"
+                )
+
             lines.append(
                 f"{s['model_badge']}\n"
                 f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                 f"{models_block}\n"
-                f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                f"{price_block}\n"
                 f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
                 f"• 💰 <b>الأرباح التاريخية:</b> <i>{s['win_rate_desc']}</i>\n"
