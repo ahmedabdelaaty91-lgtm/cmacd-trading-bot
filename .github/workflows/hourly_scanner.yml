@@ -40,4 +40,4 @@ jobs:
           git config --global user.email "bot@github.com"
           git add alerts_sent_cache.json
           git commit -m "Update sent alerts cache [skip ci]" || echo "No changes to commit"
-          git push
+          git push || echo "Push skipped or read-only repository permissions"
