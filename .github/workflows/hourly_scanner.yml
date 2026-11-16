@@ -1,0 +1,43 @@
+name: Hourly Crypto Scanner & Liquidity Breakout Hunter
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Runs automatically every 60 minutes
+  workflow_dispatch:     # Allows manual trigger from GitHub Actions UI
+
+jobs:
+  hourly-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Execute Hourly Scan (Anti-Spam Deduplication)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          DRY_RUN: ${{ secrets.DRY_RUN }}
+        run: |
+          python run_hourly.py
+
+      - name: Commit and Push Alert Cache
+        run: |
+          git config --global user.name "Hourly-Bot"
+          git config --global user.email "bot@github.com"
+          git add alerts_sent_cache.json
+          git commit -m "Update sent alerts cache [skip ci]" || echo "No changes to commit"
+          git push
