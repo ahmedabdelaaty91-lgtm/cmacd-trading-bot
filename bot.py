@@ -297,13 +297,20 @@ def execute_hourly_scan(chat_id=None):
             else:
                 models_block = f"• <b>النموذج:</b> {s['model_name']}"
 
+            ign_p = intra.get('ignition_price', s.get('price', 0))
+            cur_p_now = intra.get('cur_price', s.get('price', 0))
+            gain_p = intra.get('gain_pct', 0.0)
+            max_gain_p = intra.get('max_gain_pct', 0.0)
+            high_p = intra.get('today_high', s.get('price', 0))
+            ign_t = intra.get('ignition_time', 'اليوم')
+
             lines.append(
                 f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                 f"{models_block}\n"
-                f"• ⏰ <b>وقت الانطلاق التقريبي:</b> الساعة <code>{intra['ignition_time']}</code>\n"
-                f"• 💵 <b>سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code>\n"
-                f"• 🚀 <b>السعر الحالي الآن:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
-                f"• 🎯 <b>أعلى قمة وصلتها اليوم:</b> <code>{format_price(intra['today_high'])} $</code> (أقصى صعود <b>+{intra['max_gain_pct']}%</b>)\n"
+                f"• ⏰ <b>وقت الانطلاق التقريبي:</b> الساعة <code>{ign_t}</code>\n"
+                f"• 💵 <b>سعر الانطلاق المفترض:</b> <code>{format_price(ign_p)} $</code>\n"
+                f"• 🚀 <b>السعر الحالي الآن:</b> <code>{format_price(cur_p_now)} $</code> (صعدت بالفعل <b>+{gain_p}%</b>)\n"
+                f"• 🎯 <b>أعلى قمة وصلتها اليوم:</b> <code>{format_price(high_p)} $</code> (أقصى صعود <b>+{max_gain_p}%</b>)\n"
                 f"• 📍 <b>حالة الدعم:</b> {s['support_desc']}\n"
                 f"🛑 <b>تنبيه هام:</b> الصفقة جارية وحققت معظم الهدف اللحظي مسبقاً - <b>لا تدخل الآن</b> تجنباً للشراء عند القمة!\n"
                 f"────────────────────"

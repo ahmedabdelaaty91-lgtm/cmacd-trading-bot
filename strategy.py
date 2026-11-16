@@ -520,6 +520,7 @@ def inspect_intraday_status(symbol, pair, cur_p):
                 'is_running': False,
                 'ignition_time': 'اليوم',
                 'ignition_price': cur_p,
+                'cur_price': cur_p,
                 'gain_pct': 0.0,
                 'max_gain_pct': 0.0,
                 'today_high': cur_p
@@ -532,6 +533,7 @@ def inspect_intraday_status(symbol, pair, cur_p):
                 'is_running': False,
                 'ignition_time': 'اليوم',
                 'ignition_price': cur_p,
+                'cur_price': cur_p,
                 'gain_pct': 0.0,
                 'max_gain_pct': 0.0,
                 'today_high': cur_p
@@ -560,6 +562,7 @@ def inspect_intraday_status(symbol, pair, cur_p):
             'is_running': is_running,
             'ignition_time': ign_time,
             'ignition_price': ign_price,
+            'cur_price': cur_p,
             'gain_pct': gain_pct,
             'max_gain_pct': max_gain_pct,
             'today_high': today_high
@@ -569,6 +572,7 @@ def inspect_intraday_status(symbol, pair, cur_p):
             'is_running': False,
             'ignition_time': 'اليوم',
             'ignition_price': cur_p,
+            'cur_price': cur_p,
             'gain_pct': 0.0,
             'max_gain_pct': 0.0,
             'today_high': cur_p
