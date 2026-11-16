@@ -10,6 +10,8 @@ from strategy import (
     check_btc_regime,
     scan_authorized_strategies,
     format_authorized_report,
+    format_price,
+    inspect_intraday_status,
 )
 from binance_client import BinanceClient
 
@@ -142,6 +144,190 @@ execute_scan_cycle = execute_scan
 execute_daily_scan = execute_scan
 execute_ichimoku_trio_scan = execute_scan
 
+ALERT_CACHE_FILE = os.path.join(os.path.dirname(__file__), "alerts_sent_cache.json")
+
+
+def load_alert_cache():
+    """Loads alert deduplication cache for the current UTC day."""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if os.path.exists(ALERT_CACHE_FILE):
+        try:
+            with open(ALERT_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("date") == today_str:
+                keys = set()
+                for k in data.get("sent_keys", []):
+                    keys.add(k)
+                    if "_" in k:
+                        keys.add(k.split("_")[0])
+                return keys
+        except Exception:
+            pass
+    return set()
+
+
+def save_alert_cache(sent_keys):
+    """Persists alert deduplication cache to disk."""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        with open(ALERT_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"date": today_str, "sent_keys": list(sent_keys)}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving alert cache: {e}")
+
+
+def execute_hourly_scan(chat_id=None):
+    """
+    Executes hourly scan across all Binance USDT coins.
+    1. Consolidates multiple strategies into a single trade per coin (No duplicates!).
+    2. Inspects 1H candles to detect if an opportunity already ignited hours ago.
+    3. Categorizes into:
+       - Fresh Entries (🟢 في نطاق الشراء المثالي الآن).
+       - Already-Running Trades (⚠️ انطلقت سابقاً ولم تُرسل في أولها وهي شغالة حالياً - لا تدخل الآن).
+    4. Deduplicates against today's cache.
+    5. Sends a peaceful report if no unalerted opportunities exist.
+    """
+    if not chat_id:
+        chat_id = config.TELEGRAM_CHAT_ID
+    if not chat_id:
+        return
+
+    sent_keys = load_alert_cache()
+    scan_res = scan_authorized_strategies()
+    all_signals = scan_res.get('scalp', []) + scan_res.get('swing', [])
+
+    # Filter out coins already alerted today
+    unalerted = []
+    for s in all_signals:
+        key = s['symbol'] # Single unique symbol key
+        if key not in sent_keys:
+            unalerted.append(s)
+
+    btc = check_btc_regime()
+    btc_icon = "🟢" if btc.get('is_bull') else "🔴"
+    now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+
+    if not unalerted:
+        print(f"[{datetime.now()}] Hourly Scan complete: No unalerted opportunities. Notifying Telegram...")
+        total_tracked = len(all_signals)
+        no_new_msg = (
+            f"⏱️ <b>تقرير الفحص الساعي (رصد كل 60 دقيقة)</b>\n"
+            f"────────────────────\n"
+            f"⏰ <b>توقيت الفحص:</b> <code>{now_str}</code>\n"
+            f"📊 <b>وضع البيتكوين:</b> {btc_icon} <b>{btc.get('status_text', '')}</b>\n"
+            f"🔍 <b>النتيجة:</b> <b>لا توجد أي فرص جديدة طازجة دخلتها السيولة هذه الساعة.</b>\n"
+            f"💡 <i>(السوق هادئ حالياً ولا توجد أي انفجارات سيولة جديدة).</i>\n"
+            f"────────────────────\n"
+            f"📌 <b>إجمالي الفرص النشطة القائمة:</b> <b>{total_tracked}</b> فرصة\n"
+            f"👉 أرسل <b>فحص</b> أو <code>/scan</code> لعرض كامل تفاصيل الفرص القائمة وأهدافها."
+        )
+        send_telegram_message(chat_id, no_new_msg)
+        return
+
+    # Check 1H intraday timing & price drift for unalerted coins
+    fresh_signals = []
+    running_signals = []
+
+    for s in unalerted:
+        intra = inspect_intraday_status(s['symbol'], s['pair'], s['price'])
+        s['intraday_status'] = intra
+        if intra['is_running']:
+            running_signals.append(s)
+        else:
+            fresh_signals.append(s)
+        sent_keys.add(s['symbol'])
+
+    save_alert_cache(sent_keys)
+    new_total = len(fresh_signals) + len(running_signals)
+    print(f"[{datetime.now()}] Hourly Scan detected {new_total} coins ({len(fresh_signals)} fresh, {len(running_signals)} running). Dispatching...")
+
+    messages = []
+    header = (
+        f"🚨 <b>رادار الصيد اللحظي (الفحص الساعي)</b>\n"
+        f"────────────────────\n"
+        f"⏰ <b>توقيت الرصد:</b> <code>{now_str}</code>\n"
+        f"📊 <b>وضع البيتكوين:</b> {btc_icon} <b>{btc.get('status_text', '')}</b>\n"
+        f"⚡ <b>الفرص الطازجة للدخول الآن:</b> <b>{len(fresh_signals)}</b>\n"
+        f"⚠️ <b>صفقات جارية انطلقت مسبقاً:</b> <b>{len(running_signals)}</b>\n"
+        f"────────────────────"
+    )
+    messages.append(header)
+
+    # 1. Fresh Entries (سعرها ممتاز وما زالت في نطاق الشراء)
+    if fresh_signals:
+        lines = [
+            f"🟢 <b>صفقات جديدة طازجة (في نطاق الدخول الآمن الآن)</b>\n"
+            f"────────────────────"
+        ]
+        for s in fresh_signals:
+            if s.get('is_confluent'):
+                models_block = (
+                    f"🌟 <b>توافق استراتيجي مضاعف ({s['confluence_count']} نماذج متزامنة!):</b>\n" +
+                    "\n".join([f"  • {m}" for m in s['matched_models']])
+                )
+            else:
+                models_block = f"• <b>النموذج:</b> {s['model_name']}"
+
+            lines.append(
+                f"{s['model_badge']}\n"
+                f"🔥 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
+                f"{models_block}\n"
+                f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
+                f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
+                f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
+                f"• 📊 <b>إحصائية النموذج:</b> <i>{s['win_rate_desc']}</i>\n"
+                f"• 🎯 <b>الهدف السريع (+3%):</b> <code>{format_price(s['target_1'])} $</code>\n"
+                f"• 🚀 <b>هدف الموجه (+6%):</b> <code>{format_price(s['target_2'])} $</code>\n"
+                f"• 🛑 <b>وقف الخسارة:</b> إغلاق يومي أسفل <code>{format_price(s['stop_loss'])} $</code>\n"
+                f"────────────────────"
+            )
+        messages.append("\n".join(lines))
+
+    # 2. Running Trades (انطلقت سابقاً ولم تُرسل في أولها وهي شغالة حالياً)
+    if running_signals:
+        lines = [
+            f"⚠️ <b>صفقات قيد التشغيل حالياً (انطلقت سابقاً ولم تُرسل في بدايتها)</b>\n"
+            f"<i>(هذه الصفقات بدأت حركتها قبل ساعات وصعدت بالفعل - لا تدخل الآن تجنباً للشراء عند القمة، تُذكر للمتابعة فقط)</i>\n"
+            f"────────────────────"
+        ]
+        for s in running_signals:
+            intra = s['intraday_status']
+            if s.get('is_confluent'):
+                models_block = f"• <b>النماذج:</b> " + " + ".join(s['matched_models'])
+            else:
+                models_block = f"• <b>النموذج:</b> {s['model_name']}"
+
+            lines.append(
+                f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
+                f"{models_block}\n"
+                f"• ⏰ <b>وقت الانطلاق التقريبي:</b> الساعة <code>{intra['ignition_time']}</code>\n"
+                f"• 💵 <b>سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code>\n"
+                f"• 🚀 <b>السعر الحالي الآن:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
+                f"• 🎯 <b>أعلى قمة وصلتها اليوم:</b> <code>{format_price(intra['today_high'])} $</code> (أقصى صعود <b>+{intra['max_gain_pct']}%</b>)\n"
+                f"• 📍 <b>حالة الدعم:</b> {s['support_desc']}\n"
+                f"🛑 <b>تنبيه هام:</b> الصفقة جارية وحققت معظم الهدف اللحظي مسبقاً - <b>لا تدخل الآن</b> تجنباً للشراء عند القمة!\n"
+                f"────────────────────"
+            )
+        messages.append("\n".join(lines))
+
+    for m in messages:
+        send_telegram_message(chat_id, m)
+        time.sleep(1)
+
+
+def hourly_scheduler_loop():
+    """Runs hourly market check in background every 60 minutes."""
+    print("Hourly Squeeze & Momentum Scanner Thread Started (Interval: 1 hour)...")
+    # Wait 10 seconds on initial boot, then loop every 3600s
+    time.sleep(10)
+    while True:
+        try:
+            print(f"[{datetime.now()}] Running automatic hourly scan...")
+            execute_hourly_scan(config.TELEGRAM_CHAT_ID)
+        except Exception as e:
+            print(f"Error in hourly scheduler: {e}")
+        time.sleep(3600)
+
 
 def handle_telegram_updates():
     """Telegram Long-Polling listener with multi-command support"""
@@ -187,9 +373,11 @@ def handle_telegram_updates():
                             f"3️⃣ 💎 <b>TTM Squeeze Breakout:</b> أرباح صافية +98.2% | معامل ربحية PF 1.58.\n\n"
                             f"────────────────────\n"
                             f"📌 <b>الأوامر المتاحة:</b>\n"
-                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص الـ 200 عملة وإرسال الفرص مرتبة من الأقوى للأضعف.\n"
+                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق الشامل وإرسال كافة الفرص الحالية مرتبة من الأقوى للأضعف.\n"
+                            f"• أرسل <b>ساعة</b> أو <code>/hourly</code>: لتشغيل فحص الصيد اللحظي للفرص الجديدة التي دخلتها السيولة حديثاً.\n"
                             f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين بالنسبة لـ Daily EMA50.\n"
-                            f"• أرسل <code>/ping</code>: لاختبار الاتصال مع باينانس."
+                            f"• أرسل <code>/ping</code>: لاختبار الاتصال مع باينانس.\n\n"
+                            f"💡 <i>ملاحظة: البوت يفحص السوق تلقائياً كل 60 دقيقة في الخلفية، ويرسل لك تنبيهاً فورياً فقط عند اكتشاف انفجار سيولة جديد!</i>"
                         )
                         send_telegram_message(chat_id, welcome)
                         
@@ -200,13 +388,17 @@ def handle_telegram_updates():
                         res = client.check_connection()
                         send_telegram_message(chat_id, res['message'])
                         
+                    elif text_lower in ["ساعة", "ساعه", "/hourly", "hourly", "لحظي", "فحص ساعي", "فحص كل ساعة"]:
+                        threading.Thread(target=execute_hourly_scan, args=(chat_id,), daemon=True).start()
+
                     elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص", "صفقات", "tmo", "hull", "supertrend", "atr", "fisher"]:
                         threading.Thread(target=execute_scan, args=(chat_id, False), daemon=True).start()
                         
                     else:
                         reply = (
                             "❓ <b>الأوامر المتاحة:</b>\n"
-                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق للنماذج النخبوية الخمسة مرتبة من الأقوى للأضعف.\n"
+                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص شامل لكافة الفرص مرتبة من الأقوى للأضعف.\n"
+                            "• أرسل <b>ساعة</b> أو <code>/hourly</code>: لفحص لحظي للفرص الجديدة التي اشتعلت سيولتها الآن.\n"
                             "• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة حالة البيتكوين العامة."
                         )
                         send_telegram_message(chat_id, reply)
@@ -250,11 +442,16 @@ if __name__ == "__main__":
     import sys
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
-    print("TMO Scalper & Hull Suite Trading Bot starting...")
+    print("Elite Crypto Trading Bot starting (with Hourly Real-Time Scanner)...")
     
     # Start Health Server
     health_thread = threading.Thread(target=start_health_server, daemon=True)
     health_thread.start()
     
+    # Start Hourly Scanner Background Thread (Runs every 1 hour)
+    hourly_thread = threading.Thread(target=hourly_scheduler_loop, daemon=True)
+    hourly_thread.start()
+    print("Hourly Scanner thread launched successfully.")
+
     # Start Telegram Listener
     handle_telegram_updates()

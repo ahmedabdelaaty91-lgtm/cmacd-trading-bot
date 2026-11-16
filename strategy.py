@@ -467,7 +467,112 @@ def analyze_coin_elite_models(item):
                 'stop_loss': stop_loss,
             })
 
-    return signals if signals else None
+    if not signals:
+        return None
+
+    # Consolidation: Exactly ONE signal per coin. If multiple models match, merge into one confluence trade!
+    if len(signals) == 1:
+        s = signals[0]
+        s['is_confluent'] = False
+        s['confluence_count'] = 1
+        s['matched_models'] = [s['model_name']]
+        return [s]
+
+    signals.sort(key=lambda x: x['rank'])
+    base = signals[0]
+    is_scalp = any(s['category'] == 'SCALP' for s in signals)
+    combined_category = 'SCALP' if is_scalp else 'SWING'
+    matched_names = [s['model_name'] for s in signals]
+
+    combined_signal = {
+        'category': combined_category,
+        'rank': base['rank'],
+        'is_confluent': True,
+        'confluence_count': len(signals),
+        'matched_models': matched_names,
+        'model_name': " + ".join(matched_names),
+        'model_badge': f"🌟👑 [صفقة فائقة التوافق: {len(signals)} استراتيجيات متزامنة!]",
+        'win_rate_desc': f"🔥 قوة توافق مضاعفة ({len(signals)} استراتيجيات) | أقوى نموذج: {base['win_rate_desc']}",
+        'symbol': base['symbol'],
+        'pair': base['pair'],
+        'price': base['price'],
+        'at_support': any(s['at_support'] for s in signals),
+        'support_desc': base['support_desc'],
+        'vol_ratio': base['vol_ratio'],
+        'target_1': base['target_1'],
+        'target_2': base['target_2'],
+        'stop_loss': base['stop_loss'],
+    }
+    return [combined_signal]
+
+
+def inspect_intraday_status(symbol, pair, cur_p):
+    """
+    Checks intraday 1H klines to detect:
+    1. If the trade already ignited earlier (e.g. at 07:00 or 08:00 UTC).
+    2. How much it has pumped since ignition (gain_pct).
+    3. Whether it is a Fresh Entry or an Already-Running trade (to prevent late FOMO entry).
+    """
+    try:
+        df_1h = fetch_klines_fast(pair, '1h', limit=70)
+        if df_1h is None or len(df_1h) < 10:
+            return {
+                'is_running': False,
+                'ignition_time': 'اليوم',
+                'ignition_price': cur_p,
+                'gain_pct': 0.0,
+                'max_gain_pct': 0.0,
+                'today_high': cur_p
+            }
+        
+        today_date = df_1h['datetime'].iloc[-1].date()
+        today_candles = df_1h[df_1h['datetime'].dt.date == today_date]
+        if len(today_candles) == 0:
+            return {
+                'is_running': False,
+                'ignition_time': 'اليوم',
+                'ignition_price': cur_p,
+                'gain_pct': 0.0,
+                'max_gain_pct': 0.0,
+                'today_high': cur_p
+            }
+
+        prior = df_1h[df_1h['datetime'].dt.date < today_date]
+        avg_vol = prior['volume'].tail(24).mean() if len(prior) >= 5 else today_candles['volume'].mean()
+
+        spikes = today_candles[today_candles['volume'] >= avg_vol * 1.5]
+        if len(spikes) > 0:
+            first_spike = spikes.iloc[0]
+            ign_time = first_spike['datetime'].strftime('%H:%M UTC')
+            ign_price = float(first_spike['open'])
+        else:
+            ign_time = '00:00 UTC'
+            ign_price = float(today_candles.iloc[0]['open'])
+
+        today_high = float(today_candles['high'].max())
+        gain_pct = round(((cur_p - ign_price) / ign_price) * 100, 2)
+        max_gain_pct = round(((today_high - ign_price) / ign_price) * 100, 2)
+
+        # Running condition: pumped >= 1.8% or reached +3% target already
+        is_running = bool((gain_pct >= 1.8) or (max_gain_pct >= 3.0))
+
+        return {
+            'is_running': is_running,
+            'ignition_time': ign_time,
+            'ignition_price': ign_price,
+            'gain_pct': gain_pct,
+            'max_gain_pct': max_gain_pct,
+            'today_high': today_high
+        }
+    except Exception:
+        return {
+            'is_running': False,
+            'ignition_time': 'اليوم',
+            'ignition_price': cur_p,
+            'gain_pct': 0.0,
+            'max_gain_pct': 0.0,
+            'today_high': cur_p
+        }
 
 
 def scan_authorized_strategies():
@@ -563,10 +668,18 @@ def format_authorized_report(scan_res):
             f"────────────────────"
         ]
         for s in scalp:
+            if s.get('is_confluent'):
+                models_block = (
+                    f"🌟 <b>توافق استراتيجي مضاعف ({s['confluence_count']} نماذج متزامنة!):</b>\n" +
+                    "\n".join([f"  • {m}" for m in s['matched_models']])
+                )
+            else:
+                models_block = f"• <b>النموذج:</b> {s['model_name']}"
+
             lines.append(
                 f"{s['model_badge']}\n"
                 f"🔥 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
-                f"• <b>النموذج:</b> {s['model_name']}\n"
+                f"{models_block}\n"
                 f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
                 f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
@@ -578,7 +691,7 @@ def format_authorized_report(scan_res):
             )
         messages.append("\n".join(lines))
 
-    # 3. Section 2: صفقات تعظيم الأرباح والموجات (TP6% / SL4%)
+    # 3. Section 2: صفقات تعظيم الأرباح والموجات (TP 6% / SL 4%)
     if swing:
         lines = [
             f"🚀 <b>القسم الثاني: صفقات تعظيم الأرباح والموجات (TP 6% / SL 4%)</b>\n"
@@ -586,10 +699,18 @@ def format_authorized_report(scan_res):
             f"────────────────────"
         ]
         for s in swing:
+            if s.get('is_confluent'):
+                models_block = (
+                    f"🌟 <b>توافق استراتيجي مضاعف ({s['confluence_count']} نماذج متزامنة!):</b>\n" +
+                    "\n".join([f"  • {m}" for m in s['matched_models']])
+                )
+            else:
+                models_block = f"• <b>النموذج:</b> {s['model_name']}"
+
             lines.append(
                 f"{s['model_badge']}\n"
                 f"💎 <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
-                f"• <b>النموذج:</b> {s['model_name']}\n"
+                f"{models_block}\n"
                 f"• <b>سعر الدخول:</b> <code>{format_price(s['price'])} $</code>\n"
                 f"• <b>📍 حالة الدعم:</b> <b>{s['support_desc']}</b>\n"
                 f"• <b>السيولة الحجمية:</b> <code>{s['vol_ratio']}x</code> فوليوم أعلى من المعدل\n"
