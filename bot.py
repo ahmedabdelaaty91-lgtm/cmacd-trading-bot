@@ -358,6 +358,41 @@ def format_trades_summary(chat_id):
     send_telegram_message(chat_id, "\n".join(lines))
 
 
+def get_order_size_usdt():
+    """
+    Calculates order size according to the user's risk rule:
+    1. Base target: 18% of total portfolio equity.
+    2. If free USDT is less than 18%, enter with all available free USDT,
+       PROVIDED that available free USDT >= 10.0 USDT.
+    3. If available free USDT < 10.0 USDT, DO NOT ENTER (returns 0.0, reason).
+    """
+    free_usdt = client.get_usdt_balance()
+    min_amount = getattr(config, 'MIN_TRADE_AMOUNT_USDT', 10.0)
+    
+    if free_usdt < min_amount:
+        return 0.0, f"الرصيد المتاح ({free_usdt:.2f} USDT) أقل من الحد الأدنى المقبول للدخول ({min_amount:.2f} USDT)"
+
+    # Total account equity in USDT (Free USDT + value of held assets)
+    total_equity = client.get_total_account_equity()
+    if total_equity <= 0:
+        total_equity = free_usdt
+
+    pct = getattr(config, 'PORTFOLIO_TRADE_PCT', 0.18)
+    target_amount = total_equity * pct
+
+    if free_usdt >= target_amount and target_amount >= min_amount:
+        order_amount = round(target_amount, 2)
+    elif free_usdt >= min_amount:
+        # Less than target %, but >= 10 USDT -> enter with all available free USDT!
+        order_amount = round(free_usdt - 0.05, 2)
+        if order_amount < min_amount:
+            order_amount = min_amount
+    else:
+        return 0.0, f"الرصيد المتاح ({free_usdt:.2f} USDT) أقل من {min_amount:.2f} USDT"
+
+    return order_amount, None
+
+
 def execute_hourly_scan(chat_id=None):
     """
     Executes scan across all Binance USDT coins:
@@ -523,22 +558,22 @@ def execute_hourly_scan(chat_id=None):
                 print(f"Pair {s['pair']} already open in database. Skipping duplicate buy.")
                 continue
 
-            usdt_bal = client.get_usdt_balance()
-            if usdt_bal < config.TRADE_AMOUNT_USDT:
+            trade_amount, skip_reason = get_order_size_usdt()
+            if trade_amount < 10.0:
                 warn_msg = (
-                    f"⚠️ <b>تنبيه رصيد غير كافٍ لفتح صفقة تلقائية:</b>\n"
-                    f"• العملة: <b>#{s['symbol']}</b> (<code>{s['pair']}</code>)\n"
-                    f"• الرصيد المتاح: <code>{usdt_bal:.2f} USDT</code>\n"
-                    f"• المطلوب لكل صفقة: <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>"
+                    f"⚠️ <b>تنبيه سيولة للدخول في صفقة #{s['symbol']}:</b>\n"
+                    f"• السبب: {skip_reason}\n"
+                    f"• تم تخطي الصفقة التزاماً بشرط الحد الأدنى (10 USDT)."
                 )
                 send_telegram_message(chat_id, warn_msg)
                 break
 
-            print(f"Auto-buying {s['pair']} with {config.TRADE_AMOUNT_USDT} USDT on Binance Spot...")
-            buy_order, buy_msg = client.place_market_buy(s['pair'], config.TRADE_AMOUNT_USDT)
+            pct_label = f"{config.PORTFOLIO_TRADE_PCT * 100:.0f}%"
+            print(f"Auto-buying {s['pair']} with {trade_amount:.2f} USDT ({pct_label} Portfolio Rule) on Binance Spot...")
+            buy_order, buy_msg = client.place_market_buy(s['pair'], trade_amount)
             if buy_order:
                 fill_price = buy_order.get('avg_price', s['price'])
-                fill_qty = buy_order.get('executed_qty', round(config.TRADE_AMOUNT_USDT / fill_price, 6))
+                fill_qty = buy_order.get('executed_qty', round(trade_amount / fill_price, 6))
                 tp1 = round(fill_price * (1 + config.FAST_TARGET_PCT), 6)
                 tp2 = round(fill_price * (1 + config.RUNNER_TARGET_PCT), 6)
                 sl = round(fill_price * (1 - config.STOP_LOSS_PCT), 6)
@@ -550,7 +585,7 @@ def execute_hourly_scan(chat_id=None):
                     f"• العملة: <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
                     f"• 💵 <b>سعر الشراء الفعلي:</b> <code>{format_price(fill_price)} $</code>\n"
                     f"• 📦 <b>الكمية المشتراة:</b> <code>{fill_qty}</code>\n"
-                    f"• 💰 <b>قيمة الصفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                    f"• 💰 <b>حجم الصفقة:</b> <code>{trade_amount:.2f} USDT</code> (نظام {pct_label} من المحفظة)\n"
                     f"• 🎯 <b>الهدف الأول (+3%):</b> <code>{format_price(tp1)} $</code> (بيع 50% وتأمين الدخول)\n"
                     f"• 🚀 <b>الهدف الثاني (+6%):</b> <code>{format_price(tp2)} $</code> (بيع كامل الكمية المتبقية)\n"
                     f"• 🛑 <b>وقف الخسارة (-4%):</b> <code>{format_price(sl)} $</code>\n"
@@ -617,7 +652,7 @@ def handle_telegram_updates():
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n"
                             f"• <b>وضع التداول الآلي:</b> {trade_mode_desc}\n"
-                            f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                            f"• <b>حجم كل صفقة:</b> <code>{config.PORTFOLIO_TRADE_PCT * 100:.0f}% من المحفظة</code> (أو المتاح كاملاً إذا >= 10 USDT)\n"
                             f"• <b>الحد الأقصى للصفقات المتزامنة:</b> <code>{max_p_str}</code>\n\n"
                             f"⚡ <b>النماذج المعتمدة (قوة علمية رصينة):</b>\n"
                             f"1️⃣ <b>SuperTrend Flip:</b> دقة 82% أول يومين (+3% هدف سريع) | 96% إجمالي.\n"
@@ -646,13 +681,14 @@ def handle_telegram_updates():
                         open_c = len(database.get_open_trades())
                         mode_str = "🟢 <b>تداول آلي مباشر على باينانس (Auto-Trade ON)</b>" if config.AUTO_TRADE else "⚪ <b>وضع استشاري وتنبيهات فقط (Advisory Mode)</b>"
                         max_p_str = f"{config.MAX_OPEN_POSITIONS}" if config.MAX_OPEN_POSITIONS > 0 else "مفتوح (حسب الرصيد)"
+                        pct_str = f"{config.PORTFOLIO_TRADE_PCT * 100:.0f}%"
                         status_msg = (
                             f"⚙️ <b>حالة نظام التداول ورادار النخبة:</b>\n"
                             f"────────────────────\n"
                             f"• <b>نظام التداول:</b> {mode_str}\n"
                             f"• <b>رصيد USDT المتاح:</b> <code>{bal:.2f} USDT</code>\n"
                             f"• <b>الصفقات النشطة الآن:</b> <code>{open_c} / {max_p_str}</code>\n"
-                            f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                            f"• <b>حجم كل صفقة:</b> <code>{pct_str} من إجمالي المحفظة</code> (أو المتاح كاملاً إذا >= 10 USDT)\n"
                             f"• 🎯 <b>الهدف الأول (TP1):</b> <code>+{config.FAST_TARGET_PCT * 100:.1f}%</code> (بيع 50% وتأمين)\n"
                             f"• 🚀 <b>الهدف الثاني (TP2):</b> <code>+{config.RUNNER_TARGET_PCT * 100:.1f}%</code> (بيع 50%)\n"
                             f"• 🛑 <b>وقف الخسارة (SL):</b> <code>-{config.STOP_LOSS_PCT * 100:.1f}%</code>\n"
@@ -680,6 +716,19 @@ def handle_telegram_updates():
                         else:
                             send_telegram_message(chat_id, "⚠️ يرجى تحديد رمز العملة، مثال: <code>بيع PHA</code>")
                         
+                    elif text_lower.startswith("نسبة ") or text_lower.startswith("/pct "):
+                        parts = text.split()
+                        if len(parts) >= 2:
+                            try:
+                                val = float(parts[1].replace("%", ""))
+                                if 1.0 <= val <= 100.0:
+                                    config.PORTFOLIO_TRADE_PCT = val / 100.0
+                                    send_telegram_message(chat_id, f"✅ <b>تم تعديل نسبة الصفقة بنجاح إلى:</b> <code>{val:.0f}% من إجمالي المحفظة</code> (أو المتاح كاملاً إذا >= 10 USDT)")
+                                else:
+                                    send_telegram_message(chat_id, "⚠️ يجب أن تكون النسبة بين 1% و 100%.")
+                            except Exception:
+                                send_telegram_message(chat_id, "⚠️ مثال لتعديل النسبة: <code>نسبة 18</code> أو <code>نسبة 20</code>")
+
                     elif text_lower.startswith("حد ") or text_lower.startswith("/max "):
                         parts = text.split()
                         if len(parts) >= 2 and parts[1].isdigit():

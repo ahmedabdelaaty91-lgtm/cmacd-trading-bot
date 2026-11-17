@@ -95,8 +95,8 @@ class BinanceClient:
             }
             
         try:
-            timestamp = int(time.time() * 1000)
-            params = {'timestamp': timestamp}
+            timestamp = self._get_timestamp()
+            params = {'timestamp': timestamp, 'recvWindow': 60000}
             signed_query = self._sign(params)
             headers = {'X-MBX-APIKEY': self.api_key}
             url = f"{BINANCE_REST_URL}/api/v3/account?{signed_query}"
@@ -142,23 +142,7 @@ class BinanceClient:
     def get_usdt_balance(self):
         if self.dry_run:
             return self.simulated_balance
-            
-        try:
-            timestamp = int(time.time() * 1000)
-            params = {'timestamp': timestamp}
-            signed_query = self._sign(params)
-            headers = {'X-MBX-APIKEY': self.api_key}
-            url = f"{BINANCE_REST_URL}/api/v3/account?{signed_query}"
-            
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                for b in data.get('balances', []):
-                    if b['asset'] == 'USDT':
-                        return float(b['free'])
-        except Exception as e:
-            print(f"Error fetching Binance balance: {e}")
-        return 0.0
+        return self.get_asset_free_balance('USDT')
 
     def place_market_buy(self, pair, quote_amount_usdt):
         if not getattr(config, 'AUTO_TRADE', False):
@@ -383,7 +367,7 @@ class BinanceClient:
             return self.simulated_balance
             
         try:
-            timestamp = int(time.time() * 1000)
+            timestamp = self._get_timestamp()
             params = {'timestamp': timestamp, 'recvWindow': 60000}
             signed_query = self._sign(params)
             headers = {'X-MBX-APIKEY': self.api_key}
@@ -419,7 +403,7 @@ class BinanceClient:
         if self.dry_run:
             return []
         try:
-            timestamp = int(time.time() * 1000)
+            timestamp = self._get_timestamp()
             params = {'timestamp': timestamp, 'recvWindow': 60000}
             signed_query = self._sign(params)
             headers = {'X-MBX-APIKEY': self.api_key}

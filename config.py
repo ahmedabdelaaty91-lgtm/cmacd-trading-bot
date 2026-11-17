@@ -52,8 +52,10 @@ ADVISORY_MODE = not AUTO_TRADE
 DRY_RUN = _get_bool_env("DRY_RUN", False)
 
 # Position & Sizing Management
-# MAX_OPEN_POSITIONS: الحد الأقصى للصفقات المتزامنة (مثلاً 6 صفقات، أو 0 لفتح أي فرصة طالما يتوفر رصيد USDT)
-TRADE_AMOUNT_USDT = _get_float_env("TRADE_AMOUNT_USDT", 15.0)
+# PORTFOLIO_TRADE_PCT: نسبة كل صفقة من إجمالي المحفظة (18%)
+PORTFOLIO_TRADE_PCT = _get_float_env("PORTFOLIO_TRADE_PCT", 0.18)
+MIN_TRADE_AMOUNT_USDT = _get_float_env("MIN_TRADE_AMOUNT_USDT", 10.0)
+TRADE_AMOUNT_USDT = _get_float_env("TRADE_AMOUNT_USDT", 10.0)
 MAX_OPEN_POSITIONS = _get_int_env("MAX_OPEN_POSITIONS", 6)
 
 # Strategy Rules (Targets & Risk)
