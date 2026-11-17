@@ -22,20 +22,21 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
-# Operational Mode
-# ADVISORY_MODE = True means the bot acts 100% as an Advisory Signal System:
-# It scans the market, ranks signals, and sends full reports to Telegram.
-# AUTO_TRADE = False guarantees no automatic buys are ever placed on Binance!
-ADVISORY_MODE = True
-AUTO_TRADE = False
+# Operational Mode (Auto-Trade on Binance Spot)
+AUTO_TRADE = os.getenv("AUTO_TRADE", "True").lower() in ("true", "1", "yes")
+ADVISORY_MODE = not AUTO_TRADE
 DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes")
+
+# Position & Sizing Management
+TRADE_AMOUNT_USDT = float(os.getenv("TRADE_AMOUNT_USDT", "15.0"))
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
 
 # Strategy Rules (Targets & Risk)
 TIMEFRAME = "1d"
 BTC_EMA_PERIOD = 50
-FAST_TARGET_PCT = 0.03    # +3.0% Fast Target
-RUNNER_TARGET_PCT = 0.06  # +6.0% Runner Target
-STOP_LOSS_PCT = 0.04      # -4.0% Standard SL
+FAST_TARGET_PCT = float(os.getenv("FAST_TARGET_PCT", "0.03"))    # +3.0% Fast Target (TP1)
+RUNNER_TARGET_PCT = float(os.getenv("RUNNER_TARGET_PCT", "0.06"))  # +6.0% Runner Target (TP2)
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.04"))      # -4.0% Standard SL
 
 # Base Binance API URLs
 BINANCE_DATA_URL = "https://data-api.binance.vision"

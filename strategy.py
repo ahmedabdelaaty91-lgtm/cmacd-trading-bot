@@ -682,9 +682,13 @@ def format_authorized_report(scan_res):
 
             intra = inspect_intraday_status(s['symbol'], s['pair'], s['price'])
             if intra.get('is_running'):
+                ign_p = intra.get('ignition_price', s.get('price', 0))
+                cur_p_now = intra.get('cur_price', s.get('price', 0))
+                gain_p = intra.get('gain_pct', 0.0)
+                ign_t = intra.get('ignition_time', 'اليوم')
                 price_block = (
-                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code> (انطلقت <code>{intra['ignition_time']}</code>)\n"
-                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
+                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(ign_p)} $</code> (انطلقت <code>{ign_t}</code>)\n"
+                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(cur_p_now)} $</code> (صعدت بالفعل <b>+{gain_p}%</b>)\n"
                     f"• <b>⚠️ حالة الصفقة:</b> <b>قيد التشغيل حالياً - لا يُنصح بالدخول المتأخر (للمتابعة فقط)</b>"
                 )
             else:
@@ -726,9 +730,13 @@ def format_authorized_report(scan_res):
 
             intra = inspect_intraday_status(s['symbol'], s['pair'], s['price'])
             if intra.get('is_running'):
+                ign_p = intra.get('ignition_price', s.get('price', 0))
+                cur_p_now = intra.get('cur_price', s.get('price', 0))
+                gain_p = intra.get('gain_pct', 0.0)
+                ign_t = intra.get('ignition_time', 'اليوم')
                 price_block = (
-                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(intra['ignition_price'])} $</code> (انطلقت <code>{intra['ignition_time']}</code>)\n"
-                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(intra['cur_price'])} $</code> (صعدت بالفعل <b>+{intra['gain_pct']}%</b>)\n"
+                    f"• <b>💵 سعر الانطلاق المفترض:</b> <code>{format_price(ign_p)} $</code> (انطلقت <code>{ign_t}</code>)\n"
+                    f"• <b>🚀 السعر الحالي:</b> <code>{format_price(cur_p_now)} $</code> (صعدت بالفعل <b>+{gain_p}%</b>)\n"
                     f"• <b>⚠️ حالة الصفقة:</b> <b>قيد التشغيل حالياً - لا يُنصح بالدخول المتأخر (للمتابعة فقط)</b>"
                 )
             else:

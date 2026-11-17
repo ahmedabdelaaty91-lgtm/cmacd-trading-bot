@@ -4,8 +4,9 @@ import requests
 import threading
 import re
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import config
+import database
 from strategy import (
     check_btc_regime,
     scan_authorized_strategies,
@@ -33,6 +34,14 @@ def clean_telegram_html(text):
             esc = p.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             cleaned.append(esc)
     return ''.join(cleaned)
+
+
+def get_now_time_str():
+    """Returns local Cairo time along with UTC for crystal-clear clarity."""
+    utc_now = datetime.now(timezone.utc)
+    egypt_now = utc_now + timedelta(hours=2)
+    ap = 'ص' if egypt_now.hour < 12 else 'م'
+    return f"{egypt_now.strftime('%I:%M')} {ap} بتوقيت مصر ({utc_now.strftime('%H:%M')} UTC)"
 
 
 def send_telegram_message(chat_id, text):
@@ -176,21 +185,200 @@ def save_alert_cache(sent_keys):
         print(f"Error saving alert cache: {e}")
 
 
+def manage_open_trades(chat_id=None):
+    """
+    Monitors all open positions on Binance Spot:
+    - Checks live ticker price.
+    - If TP1 (+3%) reached: sells 50% of position and moves Stop-Loss to Break-Even (entry price).
+    - If TP2 (+6%) reached: sells remaining 50% and closes trade with full profit.
+    - If SL hit (either initial -4% SL or Break-Even entry price): sells 100% and closes trade.
+    """
+    if not chat_id:
+        chat_id = config.TELEGRAM_CHAT_ID
+
+    open_trades = database.get_open_trades()
+    if not open_trades:
+        return
+
+    print(f"[{datetime.now()}] Monitoring {len(open_trades)} active positions...")
+    for t in open_trades:
+        pair = t['pair']
+        symbol = t['symbol']
+        entry_price = t['entry_price']
+        status = t['status']
+        remaining_qty = t['remaining_quantity']
+        tp1_price = t['tp1_price']
+        tp2_price = t['tp2_price']
+        sl_price = t['sl_price']
+
+        cur_price = client.get_ticker_price(pair)
+        if not cur_price:
+            continue
+
+        database.update_trade_current_price(t['id'], cur_price)
+        gain_pct = ((cur_price - entry_price) / entry_price) * 100
+
+        # 1. Target 2 Reached (+6% or higher)
+        if cur_price >= tp2_price:
+            sell_res, sell_msg = client.place_market_sell(pair, quantity=None)
+            if sell_res:
+                database.close_trade(t['id'], cur_price, 'TP2_HIT', round(gain_pct, 2))
+                msg = (
+                    f"🚀 <b>تحقيق الهدف الثاني (+6%) بنجاح وإغلاق الصفقة بالكامل!</b> 🏆\n"
+                    f"────────────────────\n"
+                    f"• العملة: <b>#{symbol}</b> | <code>{pair}</code>\n"
+                    f"• سعر الدخول: <code>{format_price(entry_price)} $</code>\n"
+                    f"• سعر البيع: <code>{format_price(cur_price)} $</code>\n"
+                    f"• 💰 <b>نسبة الربح المحققة:</b> <b>+{gain_pct:.2f}%</b>\n"
+                    f"• حالة الخروج: تم بيع كامل الكمية المتبقية وجني الأرباح بالكامل ✅\n"
+                    f"────────────────────"
+                )
+                send_telegram_message(chat_id, msg)
+            else:
+                print(f"Failed to sell TP2 for {pair}: {sell_msg}")
+            continue
+
+        # 2. Target 1 Reached (+3% or higher)
+        if status == 'OPEN' and cur_price >= tp1_price:
+            half_qty = remaining_qty / 2.0
+            sell_res, sell_msg = client.place_market_sell(pair, quantity=half_qty)
+            if sell_res:
+                sold_qty = float(sell_res.get('executedQty', half_qty))
+                new_remaining = max(0.0, remaining_qty - sold_qty)
+                
+                if new_remaining <= 0.0001:
+                    database.close_trade(t['id'], cur_price, 'TP1_FULL_DUST', round(gain_pct, 2))
+                    msg = (
+                        f"🎯 <b>تحقيق الهدف الأول (+3%) وتم بيع كامل الصفقة!</b> 💰\n"
+                        f"────────────────────\n"
+                        f"• العملة: <b>#{symbol}</b> | <code>{pair}</code>\n"
+                        f"• سعر الدخول: <code>{format_price(entry_price)} $</code>\n"
+                        f"• سعر البيع: <code>{format_price(cur_price)} $</code> (+{gain_pct:.2f}%)\n"
+                        f"• الإجراء: تم بيع 100% من العملة لحمايتها من التفتيت (Dust Protection) وجني الأرباح كاملاً!\n"
+                        f"────────────────────"
+                    )
+                else:
+                    database.update_trade_tp1_hit(t['id'], new_remaining, entry_price)
+                    msg = (
+                        f"🎯 <b>تحقيق الهدف الأول (+3%) بنجاح!</b> 💰\n"
+                        f"────────────────────\n"
+                        f"• العملة: <b>#{symbol}</b> | <code>{pair}</code>\n"
+                        f"• سعر الدخول: <code>{format_price(entry_price)} $</code>\n"
+                        f"• سعر البيع: <code>{format_price(cur_price)} $</code> (+{gain_pct:.2f}%)\n"
+                        f"• الإجراء: تم بيع 50% من الكمية بنجاح 💵\n"
+                        f"• 🛡️ <b>تأمين الصفقة:</b> تم نقل وقف الخسارة إلى نقطة الدخول (Break-Even <code>{format_price(entry_price)} $</code>) للاستمرار نحو الهدف الثاني (+6%) بدون أي مخاطرة!\n"
+                        f"────────────────────"
+                    )
+                send_telegram_message(chat_id, msg)
+            else:
+                print(f"Failed to sell TP1 for {pair}: {sell_msg}")
+            continue
+
+        # 3. Stop Loss Hit
+        if cur_price <= sl_price:
+            sell_res, sell_msg = client.place_market_sell(pair, quantity=None)
+            if sell_res:
+                is_be = (status == 'TP1_HIT')
+                reason = "BREAK_EVEN" if is_be else "STOP_LOSS"
+                database.close_trade(t['id'], cur_price, reason, round(gain_pct, 2))
+                
+                if is_be:
+                    msg = (
+                        f"🛡️ <b>الخروج على نقطة الدخول (Break-Even) بدون أي خسارة</b>\n"
+                        f"────────────────────\n"
+                        f"• العملة: <b>#{symbol}</b> | <code>{pair}</code>\n"
+                        f"• سعر الدخول: <code>{format_price(entry_price)} $</code>\n"
+                        f"• سعر الخروج: <code>{format_price(cur_price)} $</code> ({gain_pct:+.2f}%)\n"
+                        f"• الحالة: خرجت الصفقة على نقطة الدخول بعد جني أرباح الهدف الأول مسبقاً بنجاح.\n"
+                        f"────────────────────"
+                    )
+                else:
+                    msg = (
+                        f"🛑 <b>تفعيل وقف الخسارة الآمن لحماية المحفظة</b>\n"
+                        f"────────────────────\n"
+                        f"• العملة: <b>#{symbol}</b> | <code>{pair}</code>\n"
+                        f"• سعر الدخول: <code>{format_price(entry_price)} $</code>\n"
+                        f"• سعر الخروج: <code>{format_price(cur_price)} $</code> ({gain_pct:+.2f}%)\n"
+                        f"• تم إغلاق الصفقة التزاماً بنظام إدارة المخاطر الصارم.\n"
+                        f"────────────────────"
+                    )
+                send_telegram_message(chat_id, msg)
+            else:
+                print(f"Failed to sell SL for {pair}: {sell_msg}")
+
+
+def format_trades_summary(chat_id):
+    """Formats and sends active open positions summary to Telegram."""
+    open_trades = database.get_open_trades()
+    usdt_bal = client.get_usdt_balance()
+    now_str = get_now_time_str()
+
+    if not open_trades:
+        msg = (
+            f"💼 <b>تقرير محفظة الصفقات المفتوحة (Spot)</b>\n"
+            f"────────────────────\n"
+            f"⏰ <b>التوقيت:</b> <code>{now_str}</code>\n"
+            f"💰 <b>رصيد USDT المتاح:</b> <code>{usdt_bal:.2f} USDT</code>\n"
+            f"📭 <b>لا توجد صفقات مفتوحة حالياً.</b>\n"
+            f"────────────────────\n"
+            f"🤖 <i>البوت في وضع الاستعداد لاقتناص أي فرصة جديدة فور ظهورها!</i>"
+        )
+        send_telegram_message(chat_id, msg)
+        return
+
+    lines = [
+        f"💼 <b>تقرير صفقاتك النشطة على باينانس ({len(open_trades)}/{config.MAX_OPEN_POSITIONS})</b>\n"
+        f"────────────────────\n"
+        f"⏰ <b>التوقيت:</b> <code>{now_str}</code>\n"
+        f"💰 <b>رصيد USDT المتاح:</b> <code>{usdt_bal:.2f} USDT</code>\n"
+        f"────────────────────"
+    ]
+
+    for idx, t in enumerate(open_trades, 1):
+        pair = t['pair']
+        symbol = t['symbol']
+        entry_p = t['entry_price']
+        cur_p = client.get_ticker_price(pair) or t.get('current_price', entry_p)
+        gain_pct = ((cur_p - entry_p) / entry_p) * 100
+        gain_icon = "🟢" if gain_pct >= 0 else "🔴"
+        status_badge = "🛡️ مؤمنة (TP1 تحقق)" if t['status'] == 'TP1_HIT' else "⏳ جارية"
+
+        lines.append(
+            f"{idx}️⃣ <b>#{symbol}</b> | <code>{pair}</code> ({status_badge})\n"
+            f"• سعر الدخول: <code>{format_price(entry_p)} $</code>\n"
+            f"• السعر الحالي: <code>{format_price(cur_p)} $</code> ({gain_icon} <b>{gain_pct:+.2f}%</b>)\n"
+            f"• الكمية المتبقية: <code>{t['remaining_quantity']}</code>\n"
+            f"• 🎯 الهدف 1 (+3%): <code>{format_price(t['tp1_price'])} $</code>\n"
+            f"• 🚀 الهدف 2 (+6%): <code>{format_price(t['tp2_price'])} $</code>\n"
+            f"• 🛑 الوقف الحالي: <code>{format_price(t['sl_price'])} $</code>\n"
+            f"────────────────────"
+        )
+
+    send_telegram_message(chat_id, "\n".join(lines))
+
+
 def execute_hourly_scan(chat_id=None):
     """
-    Executes hourly scan across all Binance USDT coins.
-    1. Consolidates multiple strategies into a single trade per coin (No duplicates!).
-    2. Inspects 1H candles to detect if an opportunity already ignited hours ago.
-    3. Categorizes into:
+    Executes scan across all Binance USDT coins:
+    1. Monitors and manages active open positions (TP1 +3% / TP2 +6% / SL -4% / Break-Even).
+    2. Consolidates multiple strategies into a single trade per coin (No duplicates!).
+    3. Inspects 1H candles to detect if an opportunity already ignited hours ago.
+    4. Categorizes into:
        - Fresh Entries (🟢 في نطاق الشراء المثالي الآن).
        - Already-Running Trades (⚠️ انطلقت سابقاً ولم تُرسل في أولها وهي شغالة حالياً - لا تدخل الآن).
-    4. Deduplicates against today's cache.
-    5. Sends a peaceful report if no unalerted opportunities exist.
+    5. Deduplicates against today's cache.
+    6. If AUTO_TRADE is enabled: automatically places MARKET BUY orders on Binance for fresh signals.
     """
     if not chat_id:
         chat_id = config.TELEGRAM_CHAT_ID
     if not chat_id:
         return
+
+    # 0. Always manage existing open positions first!
+    try:
+        manage_open_trades(chat_id)
+    except Exception as e:
+        print(f"Error managing open trades: {e}")
 
     sent_keys = load_alert_cache()
     scan_res = scan_authorized_strategies()
@@ -205,21 +393,23 @@ def execute_hourly_scan(chat_id=None):
 
     btc = check_btc_regime()
     btc_icon = "🟢" if btc.get('is_bull') else "🔴"
-    now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    now_str = get_now_time_str()
 
     if not unalerted:
-        print(f"[{datetime.now()}] Hourly Scan complete: No unalerted opportunities. Notifying Telegram...")
+        print(f"[{datetime.now()}] Scan complete: No unalerted opportunities. Notifying Telegram...")
         total_tracked = len(all_signals)
+        open_trades = database.get_open_trades()
+        trades_count_str = f"\n📦 <b>الصفقات النشطة قيد الإدارة:</b> <b>{len(open_trades)}</b> صفقات" if open_trades else ""
         no_new_msg = (
-            f"⏱️ <b>تقرير الفحص الساعي (رصد كل 60 دقيقة)</b>\n"
+            f"⏱️ <b>تقرير الرادار الدوري (رصد كل 20 دقيقة)</b>\n"
             f"────────────────────\n"
             f"⏰ <b>توقيت الفحص:</b> <code>{now_str}</code>\n"
             f"📊 <b>وضع البيتكوين:</b> {btc_icon} <b>{btc.get('status_text', '')}</b>\n"
-            f"🔍 <b>النتيجة:</b> <b>لا توجد أي فرص جديدة طازجة دخلتها السيولة هذه الساعة.</b>\n"
+            f"🔍 <b>النتيجة:</b> <b>لا توجد أي فرص جديدة طازجة دخلتها السيولة هذه الدورة.</b>\n"
             f"💡 <i>(السوق هادئ حالياً ولا توجد أي انفجارات سيولة جديدة).</i>\n"
             f"────────────────────\n"
-            f"📌 <b>إجمالي الفرص النشطة القائمة:</b> <b>{total_tracked}</b> فرصة\n"
-            f"👉 أرسل <b>فحص</b> أو <code>/scan</code> لعرض كامل تفاصيل الفرص القائمة وأهدافها."
+            f"📌 <b>إجمالي الفرص النشطة القائمة:</b> <b>{total_tracked}</b> فرصة{trades_count_str}\n"
+            f"👉 أرسل <b>فحص</b> أو <code>/scan</code> لعرض كامل تفاصيل الفرص، أو <b>صفقات</b> لعرض صفقاتك النشطة."
         )
         send_telegram_message(chat_id, no_new_msg)
         return
@@ -239,11 +429,11 @@ def execute_hourly_scan(chat_id=None):
 
     save_alert_cache(sent_keys)
     new_total = len(fresh_signals) + len(running_signals)
-    print(f"[{datetime.now()}] Hourly Scan detected {new_total} coins ({len(fresh_signals)} fresh, {len(running_signals)} running). Dispatching...")
+    print(f"[{datetime.now()}] Scan detected {new_total} coins ({len(fresh_signals)} fresh, {len(running_signals)} running). Dispatching...")
 
     messages = []
     header = (
-        f"🚨 <b>رادار الصيد اللحظي (الفحص الساعي)</b>\n"
+        f"🚨 <b>رادار الصيد اللحظي (فحص كل 20 دقيقة)</b>\n"
         f"────────────────────\n"
         f"⏰ <b>توقيت الرصد:</b> <code>{now_str}</code>\n"
         f"📊 <b>وضع البيتكوين:</b> {btc_icon} <b>{btc.get('status_text', '')}</b>\n"
@@ -321,19 +511,71 @@ def execute_hourly_scan(chat_id=None):
         send_telegram_message(chat_id, m)
         time.sleep(1)
 
+    # 3. Auto-Trade Execution on Binance Spot for Fresh Signals
+    if config.AUTO_TRADE and fresh_signals:
+        for s in fresh_signals:
+            open_trades = database.get_open_trades()
+            if len(open_trades) >= config.MAX_OPEN_POSITIONS:
+                print(f"Max positions limit ({config.MAX_OPEN_POSITIONS}) reached. Skipping buy for {s['symbol']}.")
+                break
+            if database.is_pair_open(s['pair']):
+                print(f"Pair {s['pair']} already open in database. Skipping duplicate buy.")
+                continue
+
+            usdt_bal = client.get_usdt_balance()
+            if usdt_bal < config.TRADE_AMOUNT_USDT:
+                warn_msg = (
+                    f"⚠️ <b>تنبيه رصيد غير كافٍ لفتح صفقة تلقائية:</b>\n"
+                    f"• العملة: <b>#{s['symbol']}</b> (<code>{s['pair']}</code>)\n"
+                    f"• الرصيد المتاح: <code>{usdt_bal:.2f} USDT</code>\n"
+                    f"• المطلوب لكل صفقة: <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>"
+                )
+                send_telegram_message(chat_id, warn_msg)
+                break
+
+            print(f"Auto-buying {s['pair']} with {config.TRADE_AMOUNT_USDT} USDT on Binance Spot...")
+            buy_order, buy_msg = client.place_market_buy(s['pair'], config.TRADE_AMOUNT_USDT)
+            if buy_order:
+                fill_price = buy_order.get('avg_price', s['price'])
+                fill_qty = buy_order.get('executed_qty', round(config.TRADE_AMOUNT_USDT / fill_price, 6))
+                tp1 = round(fill_price * (1 + config.FAST_TARGET_PCT), 6)
+                tp2 = round(fill_price * (1 + config.RUNNER_TARGET_PCT), 6)
+                sl = round(fill_price * (1 - config.STOP_LOSS_PCT), 6)
+
+                database.insert_new_trade(s['symbol'], s['pair'], fill_price, fill_qty, tp1, tp2, sl)
+                trade_alert = (
+                    f"⚡ <b>تم فتح صفقة شراء جديدة تلقائياً على باينانس!</b> 🟢\n"
+                    f"────────────────────\n"
+                    f"• العملة: <b>#{s['symbol']}</b> | <code>{s['pair']}</code>\n"
+                    f"• 💵 <b>سعر الشراء الفعلي:</b> <code>{format_price(fill_price)} $</code>\n"
+                    f"• 📦 <b>الكمية المشتراة:</b> <code>{fill_qty}</code>\n"
+                    f"• 💰 <b>قيمة الصفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                    f"• 🎯 <b>الهدف الأول (+3%):</b> <code>{format_price(tp1)} $</code> (بيع 50% وتأمين الدخول)\n"
+                    f"• 🚀 <b>الهدف الثاني (+6%):</b> <code>{format_price(tp2)} $</code> (بيع كامل الكمية المتبقية)\n"
+                    f"• 🛑 <b>وقف الخسارة (-4%):</b> <code>{format_price(sl)} $</code>\n"
+                    f"────────────────────\n"
+                    f"🤖 <i>البوت يتابع الصفقة تلقائياً على مدار الساعة وينفذ أوامر البيع عند الأهداف بدقة!</i>"
+                )
+                send_telegram_message(chat_id, trade_alert)
+            else:
+                fail_msg = (
+                    f"❌ <b>تعذر فتح صفقة #{s['symbol']} على باينانس:</b>\n"
+                    f"<code>{buy_msg}</code>"
+                )
+                send_telegram_message(chat_id, fail_msg)
+
 
 def hourly_scheduler_loop():
-    """Runs hourly market check in background every 60 minutes."""
-    print("Hourly Squeeze & Momentum Scanner Thread Started (Interval: 1 hour)...")
-    # Wait 10 seconds on initial boot, then loop every 3600s
+    """Runs market check in background every 20 minutes."""
+    print("Squeeze & Momentum Scanner Thread Started (Interval: 20 minutes)...")
     time.sleep(10)
     while True:
         try:
-            print(f"[{datetime.now()}] Running automatic hourly scan...")
+            print(f"[{datetime.now()}] Running automatic 20-min scan...")
             execute_hourly_scan(config.TELEGRAM_CHAT_ID)
         except Exception as e:
-            print(f"Error in hourly scheduler: {e}")
-        time.sleep(3600)
+            print(f"Error in scheduler: {e}")
+        time.sleep(1200) # 20 minutes
 
 
 def handle_telegram_updates():
@@ -367,26 +609,73 @@ def handle_telegram_updates():
                     text_lower = text.lower()
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
+                        trade_mode_desc = "مُفعّل (شراء وبيع آلي على باينانس) 🟢" if config.AUTO_TRADE else "استشاري وتنبيهات فقط (Advisory) ⚪"
                         welcome = (
-                            f"👋 <b>أهلاً بك في رادار النخبة الرقمي (Elite Crypto Radar 1D)!</b>\n"
+                            f"👋 <b>أهلاً بك في رادار النخبة الرقمي للتداول الآلي (Elite Auto-Trade Bot)!</b>\n"
                             f"────────────────────\n"
-                            f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n\n"
-                            f"⚡ <b>القسم الأول: صفقات الهدف الخاطف السريع (+3% في 24-48 ساعة):</b>\n"
-                            f"1️⃣ 🚀 <b>SuperTrend Flip:</b> دقة 82% في أول يومين (80% في اليوم الأول) | 96% إجمالي | فشل 4% فقط.\n"
-                            f"2️⃣ 👑 <b>ATR 15% Expansion:</b> دقة 74% في أول يومين | 95.5% إجمالي | فشل 4.5% | أرباح +115.4%.\n\n"
-                            f"🚀 <b>القسم الثاني: تعظيم الأرباح والموجات (TP 6% / SL 4%):</b>\n"
-                            f"1️⃣ 💰 <b>Ehlers Fisher Transform:</b> أرباح قياسية صافية +188.6% | معامل ربحية PF 1.58.\n"
-                            f"2️⃣ ⚡ <b>Elder's Force Index (EFI):</b> أرباح صافية +156.7% | معامل ربحية PF 1.50.\n"
-                            f"3️⃣ 💎 <b>TTM Squeeze Breakout:</b> أرباح صافية +98.2% | معامل ربحية PF 1.58.\n\n"
+                            f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n"
+                            f"• <b>وضع التداول الآلي:</b> {trade_mode_desc}\n"
+                            f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                            f"• <b>الحد الأقصى للصفقات المتزامنة:</b> <code>{config.MAX_OPEN_POSITIONS}</code> صفقات\n\n"
+                            f"⚡ <b>النماذج المعتمدة (قوة علمية رصينة):</b>\n"
+                            f"1️⃣ <b>SuperTrend Flip:</b> دقة 82% أول يومين (+3% هدف سريع) | 96% إجمالي.\n"
+                            f"2️⃣ <b>ATR Expansion:</b> دقة 74% أول يومين | 95.5% إجمالي | أرباح +115.4%.\n"
+                            f"3️⃣ <b>Ehlers Fisher:</b> أرباح قياسية صافية +188.6% (TP 6% / SL 4%).\n"
+                            f"4️⃣ <b>Elder's Force Index:</b> أرباح صافية +156.7%.\n"
+                            f"5️⃣ <b>TTM Squeeze:</b> أرباح صافية +98.2%.\n\n"
                             f"────────────────────\n"
                             f"📌 <b>الأوامر المتاحة:</b>\n"
-                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق الشامل وإرسال كافة الفرص الحالية مرتبة من الأقوى للأضعف.\n"
-                            f"• أرسل <b>ساعة</b> أو <code>/hourly</code>: لتشغيل فحص الصيد اللحظي للفرص الجديدة التي دخلتها السيولة حديثاً.\n"
-                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين بالنسبة لـ Daily EMA50.\n"
-                            f"• أرسل <code>/ping</code>: لاختبار الاتصال مع باينانس.\n\n"
-                            f"💡 <i>ملاحظة: البوت يفحص السوق تلقائياً كل 60 دقيقة في الخلفية، ويرسل لك تنبيهاً فورياً فقط عند اكتشاف انفجار سيولة جديد!</i>"
+                            f"• أرسل <b>صفقات</b> أو <code>/trades</code>: لعرض محفظتك وصفقاتك النشطة حالياً على باينانس ونسبة الربح اللحظية.\n"
+                            f"• أرسل <b>حالة</b> أو <code>/status</code>: لعرض إعدادات البوت، وضع التداول، ورصيدك المتاح.\n"
+                            f"• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص السوق وإرسال كامل الفرص القائمة مرتبة.\n"
+                            f"• أرسل <b>ساعة</b> أو <code>/hourly</code>: لتشغيل فحص الصيد اللحظي للفرص الجديدة.\n"
+                            f"• أرسل <b>بيع [رمز العملة]</b> مثل <code>بيع PHA</code>: للخروج اليدوي الفوري من أي صفقة.\n"
+                            f"• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين بالنسبة لـ EMA50.\n"
+                            f"• أرسل <code>/ping</code>: لاختبار الاتصال المباشر مع باينانس.\n\n"
+                            f"💡 <i>ملاحظة: البوت يفحص السوق تلقائياً كل 20 دقيقة ويقتنص الفرص فور اشتعالها!</i>"
                         )
                         send_telegram_message(chat_id, welcome)
+
+                    elif text_lower in ["صفقات", "صفقاتي", "/trades", "trades"]:
+                        format_trades_summary(chat_id)
+
+                    elif text_lower in ["حالة", "الوضع", "/status", "status"]:
+                        bal = client.get_usdt_balance()
+                        open_c = len(database.get_open_trades())
+                        mode_str = "🟢 <b>تداول آلي مباشر على باينانس (Auto-Trade ON)</b>" if config.AUTO_TRADE else "⚪ <b>وضع استشاري وتنبيهات فقط (Advisory Mode)</b>"
+                        status_msg = (
+                            f"⚙️ <b>حالة نظام التداول ورادار النخبة:</b>\n"
+                            f"────────────────────\n"
+                            f"• <b>نظام التداول:</b> {mode_str}\n"
+                            f"• <b>رصيد USDT المتاح:</b> <code>{bal:.2f} USDT</code>\n"
+                            f"• <b>الصفقات النشطة الآن:</b> <code>{open_c} / {config.MAX_OPEN_POSITIONS}</code>\n"
+                            f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
+                            f"• 🎯 <b>الهدف الأول (TP1):</b> <code>+{config.FAST_TARGET_PCT * 100:.1f}%</code> (بيع 50% وتأمين)\n"
+                            f"• 🚀 <b>الهدف الثاني (TP2):</b> <code>+{config.RUNNER_TARGET_PCT * 100:.1f}%</code> (بيع 50%)\n"
+                            f"• 🛑 <b>وقف الخسارة (SL):</b> <code>-{config.STOP_LOSS_PCT * 100:.1f}%</code>\n"
+                            f"• ⏱️ <b>دورة الفحص:</b> كل 20 دقيقة\n"
+                            f"────────────────────"
+                        )
+                        send_telegram_message(chat_id, status_msg)
+
+                    elif text_lower.startswith("بيع ") or text_lower.startswith("/sell ") or text_lower.startswith("/close "):
+                        parts = text.split()
+                        if len(parts) >= 2:
+                            coin = parts[1].upper().replace("#", "").replace("USDT", "")
+                            pair = f"{coin}USDT"
+                            sell_res, sell_msg = client.place_market_sell(pair, quantity=None)
+                            if sell_res:
+                                # Close in DB if tracked
+                                open_ts = [t for t in database.get_open_trades() if t['pair'] == pair]
+                                cur_p = client.get_ticker_price(pair) or 0.0
+                                for t in open_ts:
+                                    gain = ((cur_p - t['entry_price']) / t['entry_price']) * 100 if t['entry_price'] > 0 else 0.0
+                                    database.close_trade(t['id'], cur_p, 'MANUAL_EXIT', round(gain, 2))
+                                send_telegram_message(chat_id, f"✅ <b>تم تنفيذ أمر بيع فوري لعملة #{coin} على باينانس:</b>\n<code>{sell_msg}</code>")
+                            else:
+                                send_telegram_message(chat_id, f"❌ <b>فشل أمر البيع لعملة #{coin}:</b>\n<code>{sell_msg}</code>")
+                        else:
+                            send_telegram_message(chat_id, "⚠️ يرجى تحديد رمز العملة، مثال: <code>بيع PHA</code>")
                         
                     elif text_lower in ["رادار", "/radar", "radar", "بيتكوين", "btc"]:
                         send_telegram_message(chat_id, format_radar_message())
@@ -395,18 +684,21 @@ def handle_telegram_updates():
                         res = client.check_connection()
                         send_telegram_message(chat_id, res['message'])
                         
-                    elif text_lower in ["ساعة", "ساعه", "/hourly", "hourly", "لحظي", "فحص ساعي", "فحص كل ساعة"]:
+                    elif text_lower in ["ساعة", "ساعه", "/hourly", "hourly", "لحظي", "فحص ساعي", "فحص كل ساعة", "فحص 20"]:
                         threading.Thread(target=execute_hourly_scan, args=(chat_id,), daemon=True).start()
 
-                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص", "صفقات", "tmo", "hull", "supertrend", "atr", "fisher"]:
+                    elif text_lower in ["فحص", "مسح", "/scan", "scan", "فرص", "الفرص"]:
                         threading.Thread(target=execute_scan, args=(chat_id, False), daemon=True).start()
                         
                     else:
                         reply = (
                             "❓ <b>الأوامر المتاحة:</b>\n"
-                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص شامل لكافة الفرص مرتبة من الأقوى للأضعف.\n"
-                            "• أرسل <b>ساعة</b> أو <code>/hourly</code>: لفحص لحظي للفرص الجديدة التي اشتعلت سيولتها الآن.\n"
-                            "• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة حالة البيتكوين العامة."
+                            "• أرسل <b>صفقات</b> أو <code>/trades</code>: لمتابعة صفقاتك النشطة ونسبة الربح اللحظية.\n"
+                            "• أرسل <b>حالة</b> أو <code>/status</code>: لعرض رصيدك وإعدادات التداول.\n"
+                            "• أرسل <b>فحص</b> أو <code>/scan</code>: لفحص شامل لكافة الفرص.\n"
+                            "• أرسل <b>ساعة</b> أو <code>/hourly</code>: لفحص لحظي للفرص الجديدة.\n"
+                            "• أرسل <b>بيع [رمز]</b> مثل <code>بيع PHA</code>: لبيع أي عملة فوراً.\n"
+                            "• أرسل <b>رادار</b> أو <code>/radar</code>: لمعرفة وضع البيتكوين العام."
                         )
                         send_telegram_message(chat_id, reply)
         except Exception as e:

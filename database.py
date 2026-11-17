@@ -4,6 +4,71 @@ from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "bot_data.db")
 
+def insert_new_trade(symbol, pair, entry_price, quantity, tp1_price, tp2_price, sl_price):
+    """Records a newly opened live/simulated trade in database."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("""
+    INSERT INTO trades (
+        symbol, pair, entry_price, current_price, quantity, initial_quantity,
+        remaining_quantity, entry_date, status, tp1_price, tp2_price, sl_price
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+    """, (symbol, pair, entry_price, entry_price, quantity, quantity, quantity, now_str, tp1_price, tp2_price, sl_price))
+    trade_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return trade_id
+
+def get_open_trades():
+    """Fetches all active open trades from database."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM trades WHERE status IN ('OPEN', 'TP1_HIT')")
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def update_trade_tp1_hit(trade_id, remaining_qty, be_sl_price):
+    """Updates trade when TP1 is hit: sets status to TP1_HIT and moves SL to break-even."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+    UPDATE trades SET status = 'TP1_HIT', remaining_quantity = ?, sl_price = ?
+    WHERE id = ?
+    """, (remaining_qty, be_sl_price, trade_id))
+    conn.commit()
+    conn.close()
+
+def close_trade(trade_id, exit_price, exit_reason, pnl_pct):
+    """Closes trade in database with final exit metrics."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("""
+    UPDATE trades SET
+        status = 'CLOSED',
+        exit_price = ?,
+        exit_date = ?,
+        exit_reason = ?,
+        pnl_pct = ?,
+        remaining_quantity = 0
+    WHERE id = ?
+    """, (exit_price, now_str, exit_reason, pnl_pct, trade_id))
+    conn.commit()
+    conn.close()
+
+def is_pair_open(pair):
+    """Checks if there is already an active trade for this pair."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM trades WHERE pair = ? AND status IN ('OPEN', 'TP1_HIT')", (pair,))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -134,5 +199,23 @@ def record_alert(symbol, pair, date_str, tier, price, details):
     """, (symbol, pair, date_str, tier, price, details))
     conn.commit()
     conn.close()
+
+def update_trade_current_price(trade_id, cur_price):
+    """Updates current price of an open trade."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE trades SET current_price = ? WHERE id = ?", (cur_price, trade_id))
+    conn.commit()
+    conn.close()
+
+def get_recent_trades(limit=10):
+    """Fetches recent closed trades."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 init_db()
