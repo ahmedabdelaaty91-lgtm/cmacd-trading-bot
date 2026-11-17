@@ -1,9 +1,9 @@
-name: Hourly Crypto Scanner & Liquidity Breakout Hunter
+name: Fast Crypto Scanner & Auto-Trading Hunter
 
 on:
   schedule:
-    - cron: '0 * * * *' # Runs automatically every 60 minutes
-  workflow_dispatch:     # Allows manual trigger from GitHub Actions UI
+    - cron: '*/20 * * * *' # Runs every 20 minutes to catch breakouts right at their beginning
+  workflow_dispatch:        # Allows manual trigger from GitHub Actions UI
 
 jobs:
   hourly-scan:
@@ -24,20 +24,22 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Execute Hourly Scan (Anti-Spam Deduplication)
+      - name: Execute Scanner & Position Manager
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          AUTO_TRADE: ${{ secrets.AUTO_TRADE }}
+          TRADE_AMOUNT_USDT: ${{ secrets.TRADE_AMOUNT_USDT }}
           DRY_RUN: ${{ secrets.DRY_RUN }}
         run: |
           python run_hourly.py
 
-      - name: Commit and Push Alert Cache
+      - name: Commit and Push Alert Cache & Trade State
         run: |
-          git config --global user.name "Hourly-Bot"
+          git config --global user.name "AutoTrade-Bot"
           git config --global user.email "bot@github.com"
-          git add alerts_sent_cache.json
-          git commit -m "Update sent alerts cache [skip ci]" || echo "No changes to commit"
+          git add alerts_sent_cache.json bot_data.db || true
+          git commit -m "Update sent alerts cache & trade db [skip ci]" || echo "No changes to commit"
           git push || echo "Push skipped or read-only repository permissions"
