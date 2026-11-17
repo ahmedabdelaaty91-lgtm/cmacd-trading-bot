@@ -22,21 +22,46 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
+def _get_float_env(key, default):
+    val = os.getenv(key, "")
+    if val is not None and str(val).strip():
+        try:
+            return float(str(val).strip())
+        except Exception:
+            pass
+    return default
+
+def _get_int_env(key, default):
+    val = os.getenv(key, "")
+    if val is not None and str(val).strip():
+        try:
+            return int(str(val).strip())
+        except Exception:
+            pass
+    return default
+
+def _get_bool_env(key, default):
+    val = os.getenv(key, "")
+    if val is not None and str(val).strip():
+        return str(val).strip().lower() in ("true", "1", "yes")
+    return default
+
 # Operational Mode (Auto-Trade on Binance Spot)
-AUTO_TRADE = os.getenv("AUTO_TRADE", "True").lower() in ("true", "1", "yes")
+AUTO_TRADE = _get_bool_env("AUTO_TRADE", True)
 ADVISORY_MODE = not AUTO_TRADE
-DRY_RUN = os.getenv("DRY_RUN", "False").lower() in ("true", "1", "yes")
+DRY_RUN = _get_bool_env("DRY_RUN", False)
 
 # Position & Sizing Management
-TRADE_AMOUNT_USDT = float(os.getenv("TRADE_AMOUNT_USDT", "15.0"))
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
+# MAX_OPEN_POSITIONS: الحد الأقصى للصفقات المتزامنة (مثلاً 6 صفقات، أو 0 لفتح أي فرصة طالما يتوفر رصيد USDT)
+TRADE_AMOUNT_USDT = _get_float_env("TRADE_AMOUNT_USDT", 15.0)
+MAX_OPEN_POSITIONS = _get_int_env("MAX_OPEN_POSITIONS", 6)
 
 # Strategy Rules (Targets & Risk)
 TIMEFRAME = "1d"
 BTC_EMA_PERIOD = 50
-FAST_TARGET_PCT = float(os.getenv("FAST_TARGET_PCT", "0.03"))    # +3.0% Fast Target (TP1)
-RUNNER_TARGET_PCT = float(os.getenv("RUNNER_TARGET_PCT", "0.06"))  # +6.0% Runner Target (TP2)
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0.04"))      # -4.0% Standard SL
+FAST_TARGET_PCT = _get_float_env("FAST_TARGET_PCT", 0.03)    # +3.0% Fast Target (TP1)
+RUNNER_TARGET_PCT = _get_float_env("RUNNER_TARGET_PCT", 0.06)  # +6.0% Runner Target (TP2)
+STOP_LOSS_PCT = _get_float_env("STOP_LOSS_PCT", 0.04)      # -4.0% Standard SL
 
 # Base Binance API URLs
 BINANCE_DATA_URL = "https://data-api.binance.vision"

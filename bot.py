@@ -326,8 +326,9 @@ def format_trades_summary(chat_id):
         send_telegram_message(chat_id, msg)
         return
 
+    max_pos_str = f"{config.MAX_OPEN_POSITIONS}" if config.MAX_OPEN_POSITIONS > 0 else "مفتوح"
     lines = [
-        f"💼 <b>تقرير صفقاتك النشطة على باينانس ({len(open_trades)}/{config.MAX_OPEN_POSITIONS})</b>\n"
+        f"💼 <b>تقرير صفقاتك النشطة على باينانس ({len(open_trades)}/{max_pos_str})</b>\n"
         f"────────────────────\n"
         f"⏰ <b>التوقيت:</b> <code>{now_str}</code>\n"
         f"💰 <b>رصيد USDT المتاح:</b> <code>{usdt_bal:.2f} USDT</code>\n"
@@ -515,7 +516,7 @@ def execute_hourly_scan(chat_id=None):
     if config.AUTO_TRADE and fresh_signals:
         for s in fresh_signals:
             open_trades = database.get_open_trades()
-            if len(open_trades) >= config.MAX_OPEN_POSITIONS:
+            if config.MAX_OPEN_POSITIONS > 0 and len(open_trades) >= config.MAX_OPEN_POSITIONS:
                 print(f"Max positions limit ({config.MAX_OPEN_POSITIONS}) reached. Skipping buy for {s['symbol']}.")
                 break
             if database.is_pair_open(s['pair']):
@@ -610,13 +611,14 @@ def handle_telegram_updates():
                     
                     if text_lower in ["/start", "start", "مرحبا"]:
                         trade_mode_desc = "مُفعّل (شراء وبيع آلي على باينانس) 🟢" if config.AUTO_TRADE else "استشاري وتنبيهات فقط (Advisory) ⚪"
+                        max_p_str = f"{config.MAX_OPEN_POSITIONS}" if config.MAX_OPEN_POSITIONS > 0 else "مفتوح (طالما يتوفر رصيد USDT)"
                         welcome = (
                             f"👋 <b>أهلاً بك في رادار النخبة الرقمي للتداول الآلي (Elite Auto-Trade Bot)!</b>\n"
                             f"────────────────────\n"
                             f"تم ربط حسابك بنجاح ✅ (Chat ID: <code>{chat_id}</code>)\n"
                             f"• <b>وضع التداول الآلي:</b> {trade_mode_desc}\n"
                             f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
-                            f"• <b>الحد الأقصى للصفقات المتزامنة:</b> <code>{config.MAX_OPEN_POSITIONS}</code> صفقات\n\n"
+                            f"• <b>الحد الأقصى للصفقات المتزامنة:</b> <code>{max_p_str}</code>\n\n"
                             f"⚡ <b>النماذج المعتمدة (قوة علمية رصينة):</b>\n"
                             f"1️⃣ <b>SuperTrend Flip:</b> دقة 82% أول يومين (+3% هدف سريع) | 96% إجمالي.\n"
                             f"2️⃣ <b>ATR Expansion:</b> دقة 74% أول يومين | 95.5% إجمالي | أرباح +115.4%.\n"
@@ -643,12 +645,13 @@ def handle_telegram_updates():
                         bal = client.get_usdt_balance()
                         open_c = len(database.get_open_trades())
                         mode_str = "🟢 <b>تداول آلي مباشر على باينانس (Auto-Trade ON)</b>" if config.AUTO_TRADE else "⚪ <b>وضع استشاري وتنبيهات فقط (Advisory Mode)</b>"
+                        max_p_str = f"{config.MAX_OPEN_POSITIONS}" if config.MAX_OPEN_POSITIONS > 0 else "مفتوح (حسب الرصيد)"
                         status_msg = (
                             f"⚙️ <b>حالة نظام التداول ورادار النخبة:</b>\n"
                             f"────────────────────\n"
                             f"• <b>نظام التداول:</b> {mode_str}\n"
                             f"• <b>رصيد USDT المتاح:</b> <code>{bal:.2f} USDT</code>\n"
-                            f"• <b>الصفقات النشطة الآن:</b> <code>{open_c} / {config.MAX_OPEN_POSITIONS}</code>\n"
+                            f"• <b>الصفقات النشطة الآن:</b> <code>{open_c} / {max_p_str}</code>\n"
                             f"• <b>حجم كل صفقة:</b> <code>{config.TRADE_AMOUNT_USDT:.2f} USDT</code>\n"
                             f"• 🎯 <b>الهدف الأول (TP1):</b> <code>+{config.FAST_TARGET_PCT * 100:.1f}%</code> (بيع 50% وتأمين)\n"
                             f"• 🚀 <b>الهدف الثاني (TP2):</b> <code>+{config.RUNNER_TARGET_PCT * 100:.1f}%</code> (بيع 50%)\n"
@@ -677,6 +680,29 @@ def handle_telegram_updates():
                         else:
                             send_telegram_message(chat_id, "⚠️ يرجى تحديد رمز العملة، مثال: <code>بيع PHA</code>")
                         
+                    elif text_lower.startswith("حد ") or text_lower.startswith("/max "):
+                        parts = text.split()
+                        if len(parts) >= 2 and parts[1].isdigit():
+                            val = int(parts[1])
+                            config.MAX_OPEN_POSITIONS = val
+                            desc = f"{val} صفقات" if val > 0 else "مفتوح بالكامل (طالما يتوفر رصيد USDT)"
+                            send_telegram_message(chat_id, f"✅ <b>تم تعديل الحد الأقصى للصفقات بنجاح إلى:</b> <code>{desc}</code>")
+                        else:
+                            send_telegram_message(chat_id, "⚠️ مثال لتعديل الحد الأقصى: <code>حد 6</code> أو <code>حد 10</code> أو <code>حد 0</code> (مفتوح).")
+
+                    elif text_lower.startswith("مبلغ ") or text_lower.startswith("/amount "):
+                        parts = text.split()
+                        if len(parts) >= 2:
+                            try:
+                                val = float(parts[1])
+                                if val >= 5.0:
+                                    config.TRADE_AMOUNT_USDT = val
+                                    send_telegram_message(chat_id, f"✅ <b>تم تعديل حجم الصفقة بنجاح إلى:</b> <code>{val:.2f} USDT</code>")
+                                else:
+                                    send_telegram_message(chat_id, "⚠️ أقل مبلغ مقبول في باينانس هو <code>5.0 USDT</code>.")
+                            except Exception:
+                                send_telegram_message(chat_id, "⚠️ مثال لتعديل المبلغ: <code>مبلغ 20</code> أو <code>مبلغ 50</code>")
+
                     elif text_lower in ["رادار", "/radar", "radar", "بيتكوين", "btc"]:
                         send_telegram_message(chat_id, format_radar_message())
                         
